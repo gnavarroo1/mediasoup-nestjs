@@ -1,5 +1,4 @@
-import io from 'socket.io';
-
+import { Socket } from 'socket.io';
 import { Consumer, Producer, WebRtcTransport } from 'mediasoup/lib/types';
 
 export interface IClientQuery {
@@ -10,7 +9,7 @@ export interface IClientQuery {
 
 export interface IClient {
   id: string;
-  io: io.Socket;
+  io: Socket;
   media?: IMediasoupClient;
   device: string;
 }
@@ -28,7 +27,7 @@ export interface IWorkerInfo {
   workerIndex: number;
   clientsCount: number;
   roomsCount: number;
-  pidInfo?: object;
+  pidInfo?: Record<string, unknown>;
 }
 
 export interface IMsMessage {
@@ -51,5 +50,5 @@ export interface IMsMessage {
     | 'allProducerClose'
     | 'allProducerPause'
     | 'allProducerResume';
-  readonly data?: object;
+  readonly data?: Record<string, unknown>;
 }

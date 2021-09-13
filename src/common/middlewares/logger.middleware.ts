@@ -1,17 +1,16 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
-import config from 'config';
 import { NextFunction, Request, Response } from 'express';
-
 import { ReqHelper } from '../helpers/req.helper';
-
 import { LoggerService } from '../../logger/logger.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class LoggerMiddleware extends ReqHelper implements NestMiddleware {
-  private readonly _settings: ILogSettings = config.get('LOGGER_SETTINGS');
+  private _settings: ILogSettings;
 
-  constructor(private readonly logger: LoggerService) {
+  constructor(private readonly logger: LoggerService, config: ConfigService) {
     super();
+    this._settings = config.get('LOGGER_SETTINGS');
   }
 
   public use(req: Request, res: Response, next: NextFunction) {
@@ -43,8 +42,7 @@ export class LoggerMiddleware extends ReqHelper implements NestMiddleware {
     return next();
   }
 
-  // tslint:disable-next-line: no-any
-  private logMethodByStatus(message: any, stack: string, statusCode: number = 500) {
+  private logMethodByStatus(message: any, stack: string, statusCode = 500) {
     const prefix = 'LoggerMiddleware';
     if (statusCode < 300) {
       return this.logger.info(message, prefix);

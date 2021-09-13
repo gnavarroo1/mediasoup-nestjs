@@ -1,10 +1,7 @@
-import config from 'config';
 import io from 'socket.io';
-
-import AudioLevelObserver from 'mediasoup/lib/AudioLevelObserver';
-import Router, { RouterOptions } from 'mediasoup/lib/Router';
 import { MediaKind, RtpCapabilities } from 'mediasoup/lib/RtpParameters';
 import {
+  AudioLevelObserver,
   Consumer,
   ConsumerLayers,
   ConsumerScore,
@@ -12,41 +9,47 @@ import {
   Producer,
   ProducerScore,
   ProducerVideoOrientation,
+  Router,
+  RouterOptions,
   WebRtcTransport,
+  Worker,
 } from 'mediasoup/lib/types';
-import Worker from 'mediasoup/lib/Worker';
 
 type TPeer = 'producer' | 'consumer';
-
 import { IClient, IClientQuery, IMediasoupClient, IMsMessage } from './wss.interfaces';
-
 import { LoggerService } from '../logger/logger.service';
-
+import { ConfigService } from '@nestjs/config';
+import configuration from '../config/configuration';
+const config: ConfigService = new ConfigService(configuration());
 const mediasoupSettings = config.get<IMediasoupSettings>('MEDIASOUP_SETTINGS');
 
 export class WssRoom {
   public readonly clients: Map<string, IClient> = new Map();
-
   public router: Router;
   public audioLevelObserver: AudioLevelObserver;
-
   constructor(
     private worker: Worker,
     public workerIndex: number,
     public readonly session_id: string,
     private readonly logger: LoggerService,
-    private readonly wssServer: io.Server
+    private readonly wssServer: io.Server,
   ) {}
 
   private async configureWorker() {
     try {
       await this.worker
-        .createRouter({ mediaCodecs: mediasoupSettings.router.mediaCodecs } as RouterOptions)
-        .then(router => {
+        .createRouter({
+          mediaCodecs: mediasoupSettings.router.mediaCodecs,
+        } as RouterOptions)
+        .then((router) => {
           this.router = router;
-          return this.router.createAudioLevelObserver({ maxEntries: 1, threshold: -80, interval: 800 });
+          return this.router.createAudioLevelObserver({
+            maxEntries: 1,
+            threshold: -80,
+            interval: 800,
+          });
         })
-        .then(observer => (this.audioLevelObserver = observer))
+        .then((observer) => (this.audioLevelObserver = observer))
         .then(() => {
           // tslint:disable-next-line: no-any
           this.audioLevelObserver.on('volumes', (volumes: Array<{ producer: Producer; volume: number }>) => {
@@ -77,31 +80,31 @@ export class WssRoom {
 
   get audioProducerIds(): string[] {
     return Array.from(this.clients.values())
-      .filter(c => {
+      .filter((c) => {
         if (c.media && c.media.producerAudio && !c.media.producerAudio.closed) {
           return true;
         }
 
         return false;
       })
-      .map(c => c.id);
+      .map((c) => c.id);
   }
 
   get videoProducerIds(): string[] {
     return Array.from(this.clients.values())
-      .filter(c => {
+      .filter((c) => {
         if (c.media && c.media.producerVideo && !c.media.producerVideo.closed) {
           return true;
         }
 
         return false;
       })
-      .map(c => c.id);
+      .map((c) => c.id);
   }
 
   get producerIds(): string[] {
     return Array.from(this.clients.values())
-      .filter(c => {
+      .filter((c) => {
         if (c.media) {
           if (c.media.producerVideo || c.media.producerAudio) {
             return true;
@@ -112,7 +115,7 @@ export class WssRoom {
           return false;
         }
       })
-      .map(c => c.id);
+      .map((c) => c.id);
   }
 
   get getRouterRtpCapabilities(): RtpCapabilities {
@@ -125,7 +128,7 @@ export class WssRoom {
     return {
       id: this.session_id,
       worker: this.workerIndex,
-      clients: clientsArray.map(c => ({
+      clients: clientsArray.map((c) => ({
         id: c.id,
         device: c.device,
         produceAudio: c.media.producerAudio ? true : false,
@@ -144,7 +147,7 @@ export class WssRoom {
   }
 
   /**
-   * Конфигурируем воркер.
+   * Configures a worker.
    * @returns {Promise<void>} Promise<void>
    */
   public async load(): Promise<void> {
@@ -156,12 +159,12 @@ export class WssRoom {
   }
 
   /**
-   * Закрывает комнату убивая все соединения с ней.
+   * Closes the room, killing all connections to it.
    * @returns {void} void
    */
   public close(): void {
     try {
-      this.clients.forEach(user => {
+      this.clients.forEach((user) => {
         const { io: client, media, id } = user;
 
         if (client) {
@@ -184,14 +187,14 @@ export class WssRoom {
   }
 
   /**
-   * Меняет воркер в комнате.
-   * @param {IWorker} worker воркер
-   * @param {number} index индекс воркера
+   * Changes the worker in the room.
+   * @param {IWorker} worker worker
+   * @param {number} index worker's index
    * @returns {Promise<void>} Promise<void>
    */
   public async reConfigureMedia(worker: Worker, index: number): Promise<void> {
     try {
-      this.clients.forEach(user => {
+      this.clients.forEach((user) => {
         const { media } = user;
 
         if (media) {
@@ -215,13 +218,13 @@ export class WssRoom {
   }
 
   /**
-   * Отправляет сообщения от клиента всем в комнату.
-   * @param {io.Socket} client клиент
-   * @param {string} event ивент из сообщения
-   * @param {msg} msg сообщение клиента
+   * Sends messages from the client to everyone in the room.
+   * @param {io.Socket} client source client
+   * @param {string} event message event
+   * @param {msg} msg client message
    * @returns {boolean} boolean
    */
-  public broadcast(client: io.Socket, event: string, msg: object): boolean {
+  public broadcast(client: io.Socket, event: string, msg: Record<string, unknown>): boolean {
     try {
       return client.broadcast.to(this.session_id).emit(event, msg);
     } catch (error) {
@@ -230,12 +233,12 @@ export class WssRoom {
   }
 
   /**
-   * Отправляет сообщения от клиента всем в комнату включая его.
-   * @param {string} event ивент из сообщения
-   * @param {msg} msg сообщение клиента
+   * Sends messages from the client to everyone in the room, including him.
+   * @param {string} event event from the message
+   * @param {msg} msg client message
    * @returns {boolean} boolean
    */
-  public broadcastAll(event: string, msg: object): boolean {
+  public broadcastAll(event: string, msg: Record<string, unknown>): boolean {
     try {
       return this.wssServer.to(this.session_id).emit(event, msg);
     } catch (error) {
@@ -244,8 +247,8 @@ export class WssRoom {
   }
 
   /**
-   *  Убивает все соединения с медиасупом для клиента.
-   * @param {IMediasoupClient} mediaClient данные из комнату по медиасупу клиенту
+   *  Kill all connections on the mediasoup client
+   * @param {IMediasoupClient} mediaClient Data from the room at the mediasoup client
    * @returns {boolean} boolean
    */
   private closeMediaClient(mediaClient: IMediasoupClient): boolean {
@@ -270,16 +273,21 @@ export class WssRoom {
   }
 
   /**
-   * Добавляет юзера в комнату.
-   * @param {IClientQuery} query query клиента
-   * @param {io.Socket} client клиент
+   * Adds a user to the room.
+   * @param {IClientQuery} query Query client
+   * @param {io.Socket} client client
    * @returns {Promise<boolean>} Promise<boolean>
    */
   public async addClient(query: IClientQuery, client: io.Socket): Promise<boolean> {
     try {
       this.logger.info(`${query.user_id} connected to room ${this.session_id}`);
 
-      this.clients.set(query.user_id, { io: client, id: query.user_id, device: query.device, media: {} });
+      this.clients.set(query.user_id, {
+        io: client,
+        id: query.user_id,
+        device: query.device,
+        media: {},
+      });
 
       client.join(this.session_id);
 
@@ -294,8 +302,8 @@ export class WssRoom {
   }
 
   /**
-   * Удаляет юзера из комнаты.
-   * @param {string} user_id юзера
+   * Removes the user from the room.
+   * @param {string} user_id user
    * @returns {Promise<boolean>} Promise<boolean>
    */
   public async removeClient(user_id: string): Promise<boolean> {
@@ -327,12 +335,12 @@ export class WssRoom {
   }
 
   /**
-   * Обрабатывает сообщение.
-   * @param {string} user_id автор сообщения
-   * @param {IMsMessage} msg сообщение
-   * @returns {Promise<object | boolean>} Promise<object | boolean>
+   * Processes the message.
+   * @param {string} user_id sender of the message
+   * @param {IMsMessage} msg message
+   * @returns {Promise<Record<string, unknown> | boolean>} Promise<Record<string, unknown> | boolean>
    */
-  public async speakMsClient(user_id: string, msg: IMsMessage): Promise<object | boolean> {
+  public async speakMsClient(user_id: string, msg: IMsMessage): Promise<Record<string, unknown> | string[] | boolean> {
     try {
       switch (msg.action) {
         case 'getRouterRtpCapabilities':
@@ -344,14 +352,18 @@ export class WssRoom {
         case 'connectWebRtcTransport':
           return await this.connectWebRtcTransport(
             msg.data as { dtlsParameters: DtlsParameters; type: TPeer },
-            user_id
+            user_id,
           );
         case 'produce':
           return await this.produce(msg.data as { rtpParameters: RTCRtpParameters; kind: MediaKind }, user_id);
         case 'consume':
           return await this.consume(
-            msg.data as { rtpCapabilities: RtpCapabilities; user_id: string; kind: MediaKind },
-            user_id
+            msg.data as {
+              rtpCapabilities: RtpCapabilities;
+              user_id: string;
+              kind: MediaKind;
+            },
+            user_id,
           );
         case 'restartIce':
           return await this.restartIce(msg.data as { type: TPeer }, user_id);
@@ -389,12 +401,12 @@ export class WssRoom {
   }
 
   /**
-   * Создает WebRTC транспорт для приема или передачи стрима.
-   * @param {object} data { type: TPeer }
-   * @param {string} user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * Creates a WebRTC transport for receiving or transmitting a stream.
+   * @param {Record<string, unknown>} data { type: TPeer }
+   * @param {string} user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async createWebRtcTransport(data: { type: TPeer }, user_id: string): Promise<object> {
+  private async createWebRtcTransport(data: { type: TPeer }, user_id: string): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} createWebRtcTransport - ${data.type}`);
 
@@ -437,15 +449,15 @@ export class WssRoom {
   }
 
   /**
-   * Подключает WebRTC транспорт.
-   * @param {object} data { dtlsParameters: RTCDtlsParameters; type: TPeer }
-   * @param {string} user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * Connects WebRTC transport.
+   * @param {Record<string, unknown>} data { dtlsParameters: RTCDtlsParameters; type: TPeer }
+   * @param {string} user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async connectWebRtcTransport(
     data: { dtlsParameters: DtlsParameters; type: TPeer },
-    user_id: string
-  ): Promise<object> {
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} connectWebRtcTransport - ${data.type}`);
 
@@ -464,7 +476,7 @@ export class WssRoom {
 
       if (!transport) {
         throw new Error(
-          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`
+          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
         );
       }
 
@@ -477,12 +489,15 @@ export class WssRoom {
   }
 
   /**
-   * Принимает стрим видео или аудио от пользователя.
-   * @param {object} data { rtpParameters: RTCRtpParameters; kind: MediaKind }
-   * @param {string} user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * Receives a stream of video or audio from the user.
+   * @param {Record<string, unknown>} data { rtpParameters: RTCRtpParameters; kind: MediaKind }
+   * @param {string} user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async produce(data: { rtpParameters: RTCRtpParameters; kind: MediaKind }, user_id: string): Promise<object> {
+  private async produce(
+    data: { rtpParameters: RTCRtpParameters; kind: MediaKind },
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} produce - ${data.kind}`);
 
@@ -494,7 +509,10 @@ export class WssRoom {
         throw new Error(`Couldn't find producer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`);
       }
 
-      const producer = await transport.produce({ ...data, appData: { user_id, kind: data.kind } });
+      const producer = await transport.produce({
+        ...data,
+        appData: { user_id, kind: data.kind },
+      });
 
       switch (data.kind) {
         case 'video':
@@ -502,7 +520,9 @@ export class WssRoom {
           break;
         case 'audio':
           user.media.producerAudio = producer;
-          await this.audioLevelObserver.addProducer({ producerId: producer.id });
+          await this.audioLevelObserver.addProducer({
+            producerId: producer.id,
+          });
           break;
       }
 
@@ -510,13 +530,16 @@ export class WssRoom {
 
       if (data.kind === 'video') {
         producer.on('videoorientationchange', (videoOrientation: ProducerVideoOrientation) => {
-          this.broadcastAll('mediaVideoOrientationChange', { user_id, videoOrientation });
+          this.broadcastAll('mediaVideoOrientationChange', {
+            user_id,
+            videoOrientation,
+          });
         });
       }
 
       producer.on('score', (score: ProducerScore[]) => {
         this.logger.info(
-          `room ${this.session_id} user ${user_id} producer ${data.kind} score ${JSON.stringify(score)}`
+          `room ${this.session_id} user ${user_id} producer ${data.kind} score ${JSON.stringify(score)}`,
         );
       });
 
@@ -527,15 +550,19 @@ export class WssRoom {
   }
 
   /**
-   * Передает стрим видео или аудио от одного пользователя другому.
-   * @param {object} data { rtpCapabilities: RTCRtpCapabilities; user_id: string; kind: MediaKind }
-   * @param {string} user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * Streams video or audio from one user to another.
+   * @param {Record<string, unknown>} data { rtpCapabilities: RTCRtpCapabilities; user_id: string; kind: MediaKind }
+   * @param {string} user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async consume(
-    data: { rtpCapabilities: RtpCapabilities; user_id: string; kind: MediaKind },
-    user_id: string
-  ): Promise<object> {
+    data: {
+      rtpCapabilities: RtpCapabilities;
+      user_id: string;
+      kind: MediaKind;
+    },
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} produce - ${data.kind}`);
 
@@ -562,7 +589,7 @@ export class WssRoom {
         })
       ) {
         throw new Error(
-          `Couldn't consume ${data.kind} with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`
+          `Couldn't consume ${data.kind} with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
         );
       }
 
@@ -593,7 +620,10 @@ export class WssRoom {
           });
 
           consumer.on('producerclose', async () => {
-            user.io.emit('mediaProducerClose', { user_id: data.user_id, kind: data.kind });
+            user.io.emit('mediaProducerClose', {
+              user_id: data.user_id,
+              kind: data.kind,
+            });
             consumer.close();
             user.media.consumersVideo.delete(data.user_id);
           });
@@ -611,7 +641,10 @@ export class WssRoom {
           });
 
           consumer.on('producerclose', async () => {
-            user.io.emit('mediaProducerClose', { user_id: data.user_id, kind: data.kind });
+            user.io.emit('mediaProducerClose', {
+              user_id: data.user_id,
+              kind: data.kind,
+            });
             consumer.close();
             user.media.consumersAudio.delete(data.user_id);
           });
@@ -620,23 +653,29 @@ export class WssRoom {
 
       consumer.on('producerpause', async () => {
         await consumer.pause();
-        user.io.emit('mediaProducerPause', { user_id: data.user_id, kind: data.kind });
+        user.io.emit('mediaProducerPause', {
+          user_id: data.user_id,
+          kind: data.kind,
+        });
       });
 
       consumer.on('producerresume', async () => {
         await consumer.resume();
-        user.io.emit('mediaProducerResume', { user_id: data.user_id, kind: data.kind });
+        user.io.emit('mediaProducerResume', {
+          user_id: data.user_id,
+          kind: data.kind,
+        });
       });
 
       consumer.on('score', (score: ConsumerScore[]) => {
         this.logger.info(
-          `room ${this.session_id} user ${user_id} consumer ${data.kind} score ${JSON.stringify(score)}`
+          `room ${this.session_id} user ${user_id} consumer ${data.kind} score ${JSON.stringify(score)}`,
         );
       });
 
       consumer.on('layerschange', (layers: ConsumerLayers | null) => {
         this.logger.info(
-          `room ${this.session_id} user ${user_id} consumer ${data.kind} layerschange ${JSON.stringify(layers)}`
+          `room ${this.session_id} user ${user_id} consumer ${data.kind} layerschange ${JSON.stringify(layers)}`,
         );
       });
 
@@ -658,13 +697,13 @@ export class WssRoom {
   }
 
   /**
-   * Перезапустить соединительные узлы.
-   * @param {object} data { type: TPeer }
+   * Restarts ice connection.
+   * @param {Record<string, unknown>} data { type: TPeer }
    * https://developer.mozilla.org/ru/docs/Web/API/WebRTC_API/%D0%BF%D1%80%D0%BE%D1%82%D0%BE%D0%BA%D0%BE%D0%BB%D1%8B
-   * @param {string} user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * @param {string} user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async restartIce(data: { type: TPeer }, user_id: string): Promise<object> {
+  private async restartIce(data: { type: TPeer }, user_id: string): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} restartIce - ${data.type}`);
 
@@ -683,7 +722,7 @@ export class WssRoom {
 
       if (!transport) {
         throw new Error(
-          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`
+          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
         );
       }
 
@@ -696,9 +735,9 @@ export class WssRoom {
   }
 
   /**
-   * Запросить опорный кадр.
-   * @param {object} data { user_id: string }
-   * @param {string} user_id автор сообщения
+   * Request a keyframe.
+   * @param {Record<string, unknown>} data { user_id: string }
+   * @param {string} user_id sender of the message
    * @returns {Promise<boolean>} Promise<boolean>
    */
   private async requestConsumerKeyFrame(data: { user_id: string }, user_id: string): Promise<boolean> {
@@ -720,12 +759,12 @@ export class WssRoom {
   }
 
   /**
-   * Отдает стату транспорта.
-   * @param {object} data { type: TPeer }
-   * @param {string} user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * Gives the transport status.
+   * @param {Record<string, unknown>} data { type: TPeer }
+   * @param {string} user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async getTransportStats(data: { type: TPeer }, user_id: string): Promise<object> {
+  private async getTransportStats(data: { type: TPeer }, user_id: string): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} getTransportStats - ${data.type}`);
 
@@ -744,7 +783,7 @@ export class WssRoom {
 
       if (!transport) {
         throw new Error(
-          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`
+          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
         );
       }
 
@@ -757,13 +796,16 @@ export class WssRoom {
   }
 
   /**
-   * Отдает инфу о стриме юзера
-   * Замер происходит когда от юзера приходит стрим на сервер.
-   * @param {object} data { user_id: string; kind: MediaKind }
-   * @param {string} _user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * Gives information about the user's stream
+   * Measurement occurs when a stream comes from the user to the server.
+   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
+   * @param {string} _user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async getProducerStats(data: { user_id: string; kind: MediaKind }, _user_id: string): Promise<object> {
+  private async getProducerStats(
+    data: { user_id: string; kind: MediaKind },
+    _user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} getProducerStats - ${data.kind}`);
 
@@ -782,7 +824,7 @@ export class WssRoom {
 
       if (!producer) {
         throw new Error(
-          `Couldn't find ${data.kind} producer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`
+          `Couldn't find ${data.kind} producer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
         );
       }
 
@@ -795,13 +837,16 @@ export class WssRoom {
   }
 
   /**
-   * Отдает инфу о стриме юзера на которого подписан текущий юзер
-   * Замер происходит когда от того юзера передается стрим текущему юзеру.
-   * @param {object} data { user_id: string; kind: MediaKind }
-   * @param {string} user_id автор сообщения
-   * @returns {Promise<object>} Promise<object>
+   * Gives information about the stream of the user to which the current user is subscribed.
+   * Measurement occurs when the stream is transmitted from that user to the current user.
+   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
+   * @param {string} user_id sender of the message
+   * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async getConsumerStats(data: { user_id: string; kind: MediaKind }, user_id: string): Promise<object> {
+  private async getConsumerStats(
+    data: { user_id: string; kind: MediaKind },
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
       this.logger.info(`room ${this.session_id} getProducerStats - ${data.kind}`);
 
@@ -820,7 +865,7 @@ export class WssRoom {
 
       if (!consumer) {
         throw new Error(
-          `Couldn't find ${data.kind} consumer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`
+          `Couldn't find ${data.kind} consumer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
         );
       }
 
@@ -833,8 +878,8 @@ export class WssRoom {
   }
 
   /**
-   * Id юзеров которые передаеют стримы на сервер.
-   * @param {string} _user_id автор сообщения
+   * Id of users who transmit video streams to the server.
+   * @param {string} _user_id sender of the message
    * @returns {Promise<string[]>} Promise<string[]>
    */
   private async getVideoProducerIds(_user_id: string): Promise<string[]> {
@@ -846,8 +891,8 @@ export class WssRoom {
   }
 
   /**
-   * Id юзеров которые передаеют стримы на сервер.
-   * @param {string} _user_id автор сообщения
+   * Id of users who transmit audio streams to the server.
+   * @param {string} _user_id sender of the message
    * @returns {Promise<string[]>} Promise<string[]>
    */
   private async getAudioProducerIds(_user_id: string): Promise<string[]> {
@@ -859,9 +904,9 @@ export class WssRoom {
   }
 
   /**
-   * Остановить передачу стрима на сервер от пользователя.
-   * @param {object} data { user_id: string; kind: MediaKind }
-   * @param {string} _user_id автор сообщения
+   * Stop streaming from the user to the server.
+   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
+   * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async producerClose(data: { user_id: string; kind: MediaKind }, _user_id: string): Promise<boolean> {
@@ -892,9 +937,9 @@ export class WssRoom {
   }
 
   /**
-   * Приостановить передачу стрима на сервер от пользователя.
-   * @param {object} data { user_id: string; kind: MediaKind }
-   * @param {string} _user_id автор сообщения
+   * Suspend streaming from the user to the server..
+   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
+   * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async producerPause(data: { user_id: string; kind: MediaKind }, _user_id: string): Promise<boolean> {
@@ -925,9 +970,9 @@ export class WssRoom {
   }
 
   /**
-   * Возобновить передачу стрима на сервер от пользователя.
-   * @param {object} data { user_id: string; kind: MediaKind }
-   * @param {string} _user_id автор сообщения
+   * Resume streaming from the user to the server.
+   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
+   * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async producerResume(data: { user_id: string; kind: MediaKind }, _user_id: string): Promise<boolean> {
@@ -960,14 +1005,14 @@ export class WssRoom {
   }
 
   /**
-   * Остановить передачу стрима на сервер от всех пользователей.
-   * @param {object} data { kind: MediaKind }
-   * @param {string} _user_id автор сообщения
+   * Stream stop transmission to the server from all users..
+   * @param {Record<string, unknown>} data { kind: MediaKind }
+   * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async allProducerClose(data: { kind: MediaKind }, _user_id: string): Promise<boolean> {
     try {
-      this.clients.forEach(async client => {
+      this.clients.forEach(async (client) => {
         if (client.media) {
           let target_producer: Producer;
 
@@ -993,14 +1038,14 @@ export class WssRoom {
   }
 
   /**
-   * Приостановить передачу стрима на сервер от всех пользователей.
-   * @param {object} data { kind: MediaKind }
-   * @param {string} _user_id автор сообщения
+   * Pause Stream transmission to the server from all users.
+   * @param {Record<string, unknown>} data { kind: MediaKind }
+   * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async allProducerPause(data: { kind: MediaKind }, _user_id: string): Promise<boolean> {
     try {
-      this.clients.forEach(async client => {
+      this.clients.forEach(async (client) => {
         if (client.media) {
           let target_producer: Producer;
 
@@ -1026,14 +1071,14 @@ export class WssRoom {
   }
 
   /**
-   * Возобновить передачу стрима на сервер от всех пользователей.
-   * @param {object} data { kind: MediaKind }
-   * @param {string} _user_id автор сообщения
+   * Resume streaming from all users to the server.
+   * @param {Record<string, unknown>} data { kind: MediaKind }
+   * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async allProducerResume(data: { kind: MediaKind }, _user_id: string): Promise<boolean> {
     try {
-      this.clients.forEach(async client => {
+      this.clients.forEach(async (client) => {
         if (client.media) {
           let target_producer: Producer;
 
@@ -1061,19 +1106,16 @@ export class WssRoom {
   }
 
   /**
-   * Изменяет качество стрима.
+   * Changes the quality of the stream.
    * @returns {Promise<boolean>} Promise<boolean>
    */
   private async updateMaxIncomingBitrate(): Promise<boolean> {
     try {
-      const {
-        minimumAvailableOutgoingBitrate,
-        maximumAvailableOutgoingBitrate,
-        factorIncomingBitrate,
-      } = mediasoupSettings.webRtcTransport;
+      const { minimumAvailableOutgoingBitrate, maximumAvailableOutgoingBitrate, factorIncomingBitrate } =
+        mediasoupSettings.webRtcTransport;
 
       let newMaxIncomingBitrate = Math.round(
-        maximumAvailableOutgoingBitrate / ((this.producerIds.length - 1) * factorIncomingBitrate)
+        maximumAvailableOutgoingBitrate / ((this.producerIds.length - 1) * factorIncomingBitrate),
       );
 
       if (newMaxIncomingBitrate < minimumAvailableOutgoingBitrate) {
@@ -1084,7 +1126,7 @@ export class WssRoom {
         newMaxIncomingBitrate = maximumAvailableOutgoingBitrate;
       }
 
-      this.clients.forEach(client => {
+      this.clients.forEach((client) => {
         if (client.media) {
           if (client.media.producerTransport && !client.media.producerTransport.closed) {
             client.media.producerTransport.setMaxIncomingBitrate(newMaxIncomingBitrate);

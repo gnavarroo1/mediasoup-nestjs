@@ -1,10 +1,7 @@
 import { Controller, Get, Param } from '@nestjs/common';
-
-import pidusage from 'pidusage';
-
 import { throwNOTFOUND } from '../common/errors';
-
 import { WssGateway } from './wss.gateway';
+import pidusage from 'pidusage';
 
 @Controller('websocket')
 export class WssController {
@@ -16,7 +13,9 @@ export class WssController {
 
     const usage = await pidusage(Object.keys(workers));
 
-    Object.keys(workers).forEach(key => {
+    Object.keys(workers).forEach((key) => {
+      const a = usage[key];
+      console.log(a);
       workers[key].pidInfo = usage[key] || {};
     });
 
@@ -25,7 +24,7 @@ export class WssController {
 
   @Get('rooms/stats')
   public async roomsStats() {
-    return Array.from(this.wssGateway.rooms.values()).map(room => {
+    return Array.from(this.wssGateway.rooms.values()).map((room) => {
       return room.stats;
     });
   }

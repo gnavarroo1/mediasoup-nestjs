@@ -1,13 +1,3 @@
-interface IClient {
-  readonly client_id: string;
-  readonly client_secret: string;
-}
-
-interface ILogSettings {
-  readonly level: string;
-  readonly silence: string[];
-}
-
 interface IAppSettings {
   readonly appPort: number;
   readonly wssPort: number;
@@ -24,6 +14,15 @@ interface ICorsSettings {
   readonly allowedHeaders: string[];
 }
 
+interface IClient {
+  readonly client_id: string;
+  readonly client_secret: string;
+}
+
+interface ILogSettings {
+  readonly level: string;
+  readonly silence: string[];
+}
 interface IMediasoupWorkerSettings {
   readonly rtcMinPort: number;
   readonly rtcMaxPort: number;
@@ -38,7 +37,7 @@ interface IMediasoupMediacodecSettings {
   readonly channels?: number;
   readonly preferredPayloadType?: number;
   readonly rtcpFeedback?: IMediasoupRtcpFeedback[];
-  readonly parameters?: { "x-google-start-bitrate": number }
+  readonly parameters?: { 'x-google-start-bitrate': number };
 }
 
 interface IMediasoupListenIds {
@@ -57,6 +56,6 @@ interface IMediasoupWebRtcTransport {
 interface IMediasoupSettings {
   readonly workerPool: number;
   readonly worker: IMediasoupWorkerSettings;
-  readonly router: { mediaCodecs: IMediasoupMediacodecSettings[] }
+  readonly router: { mediaCodecs: IMediasoupMediacodecSettings[] };
   readonly webRtcTransport: IMediasoupWebRtcTransport;
 }
