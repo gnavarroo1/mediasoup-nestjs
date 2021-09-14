@@ -27,7 +27,7 @@ export interface IWorkerInfo {
   workerIndex: number;
   clientsCount: number;
   roomsCount: number;
-  pidInfo?: Record<string, unknown>;
+  pidInfo?: any;
 }
 
 export interface IMsMessage {
