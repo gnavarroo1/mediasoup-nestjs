@@ -132,12 +132,11 @@ export class WssGateway
    */
   private async createWorkers(): Promise<void> {
     const promises = [];
+    const workerSettings = this.mediasoupSettings.worker as WorkerSettings;
+    console.log(workerSettings);
     for (let i = 0; i < this.mediasoupSettings.workerPool; i++) {
-      promises.push(
-        mediasoup.createWorker(this.mediasoupSettings.worker as WorkerSettings),
-      );
+      promises.push(mediasoup.createWorker(workerSettings));
     }
-
     this.workers = (await Promise.all(promises)).reduce(
       (acc, worker, index) => {
         acc[index] = {

@@ -5,11 +5,24 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as cookieParser from 'cookie-parser';
 import * as helmet from 'helmet';
+import * as fs from 'fs';
+import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  // const configService = app.get(ConfigService);
-  // const appSettings: AppConfigService = app.get('AppConfigService');
+  let httpsOptions: HttpsOptions = {
+    key: '',
+    cert: '',
+  };
+  if (process.env.ENVIRONMENT !== 'DEVELOPMENT') {
+    httpsOptions = {
+      key: fs.readFileSync('./secrets/private-key.pem'),
+      cert: fs.readFileSync('./secrets/public-certificate.pem'),
+    };
+  }
+
+  const app = await NestFactory.create(AppModule, {
+    httpsOptions,
+  });
 
   const options = new DocumentBuilder()
     .setTitle('NestJS Mediasoup Example')
