@@ -1,11 +1,13 @@
-export default () => ({
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('app', () => ({
   LOGGER_SETTINGS: {
     level: 'debug',
     silence: ['healthz'],
   },
   APP_SETTINGS: {
-    appPort: 8085,
-    wssPort: 8086,
+    appPort: process.env.API_PORT,
+    wssPort: process.env.WSS_PORT,
     swaggerScheme: 'http',
     client: {
       client_id: '',
@@ -19,6 +21,7 @@ export default () => ({
     allowedMethods: ['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
     allowedCredentials: false,
     allowedHeaders: [
+      'X-Requested-With',
       'Content-Type',
       'Content-Language',
       'Authorization',
@@ -57,7 +60,7 @@ export default () => ({
     webRtcTransport: {
       listenIps: [
         {
-          ip: '127.0.0.1',
+          ip: process.env['MEDIASOUP_IP'],
           announcedIp: null,
         },
       ],
@@ -67,4 +70,4 @@ export default () => ({
       factorIncomingBitrate: 0.75,
     },
   },
-});
+}));

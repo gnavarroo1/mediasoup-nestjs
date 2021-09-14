@@ -3,14 +3,18 @@ import { NextFunction, Request, Response } from 'express';
 import { ReqHelper } from '../helpers/req.helper';
 import { LoggerService } from '../../logger/logger.service';
 import { ConfigService } from '@nestjs/config';
+import { AppConfigService } from '../../config/config.service';
 
 @Injectable()
 export class LoggerMiddleware extends ReqHelper implements NestMiddleware {
   private _settings: ILogSettings;
 
-  constructor(private readonly logger: LoggerService, config: ConfigService) {
+  constructor(
+    private readonly logger: LoggerService,
+    private config: AppConfigService,
+  ) {
     super();
-    this._settings = config.get('LOGGER_SETTINGS');
+    this._settings = config.loggerSettings;
   }
 
   public use(req: Request, res: Response, next: NextFunction) {

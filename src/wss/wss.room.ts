@@ -16,18 +16,21 @@ import {
 } from 'mediasoup/lib/types';
 
 type TPeer = 'producer' | 'consumer';
-import { IClient, IClientQuery, IMediasoupClient, IMsMessage } from './wss.interfaces';
+import {
+  IClient,
+  IClientQuery,
+  IMediasoupClient,
+  IMsMessage,
+} from './wss.interfaces';
 import { LoggerService } from '../logger/logger.service';
-import { ConfigService } from '@nestjs/config';
-import configuration from '../config/configuration';
-const config: ConfigService = new ConfigService(configuration());
-const mediasoupSettings = config.get<IMediasoupSettings>('MEDIASOUP_SETTINGS');
+import { AppConfigService } from '../config/config.service';
 
 export class WssRoom {
   public readonly clients: Map<string, IClient> = new Map();
   public router: Router;
   public audioLevelObserver: AudioLevelObserver;
   constructor(
+    private mediasoupSettings: IMediasoupSettings,
     private worker: Worker,
     public workerIndex: number,
     public readonly session_id: string,
@@ -39,7 +42,7 @@ export class WssRoom {
     try {
       await this.worker
         .createRouter({
-          mediaCodecs: mediasoupSettings.router.mediaCodecs,
+          mediaCodecs: this.mediasoupSettings.router.mediaCodecs,
         } as RouterOptions)
         .then((router) => {
           this.router = router;
@@ -52,12 +55,16 @@ export class WssRoom {
         .then((observer) => (this.audioLevelObserver = observer))
         .then(() => {
           // tslint:disable-next-line: no-any
-          this.audioLevelObserver.on('volumes', (volumes: Array<{ producer: Producer; volume: number }>) => {
-            this.wssServer.to(this.session_id).emit('mediaActiveSpeaker', {
-              user_id: (volumes[0].producer.appData as { user_id: string }).user_id,
-              volume: volumes[0].volume,
-            });
-          });
+          this.audioLevelObserver.on(
+            'volumes',
+            (volumes: Array<{ producer: Producer; volume: number }>) => {
+              this.wssServer.to(this.session_id).emit('mediaActiveSpeaker', {
+                user_id: (volumes[0].producer.appData as { user_id: string })
+                  .user_id,
+                volume: volumes[0].volume,
+              });
+            },
+          );
 
           this.audioLevelObserver.on('silence', () => {
             this.wssServer.to(this.session_id).emit('mediaActiveSpeaker', {
@@ -66,7 +73,11 @@ export class WssRoom {
           });
         });
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'WssRoom - configureWorker');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'WssRoom - configureWorker',
+      );
     }
   }
 
@@ -168,7 +179,9 @@ export class WssRoom {
         const { io: client, media, id } = user;
 
         if (client) {
-          client.broadcast.to(this.session_id).emit('mediaDisconnectMember', { id });
+          client.broadcast
+            .to(this.session_id)
+            .emit('mediaDisconnectMember', { id });
           client.leave(this.session_id);
         }
 
@@ -180,7 +193,7 @@ export class WssRoom {
       this.audioLevelObserver.close();
       this.router.close();
 
-      this.logger.info(`room ${this.session_id} closed`);
+      this.logger.log(`room ${this.session_id} closed`);
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssRoom - close');
     }
@@ -213,7 +226,11 @@ export class WssRoom {
 
       this.broadcastAll('mediaReconfigure', {});
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'WssRoom - reConfigureMedia');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'WssRoom - reConfigureMedia',
+      );
     }
   }
 
@@ -224,7 +241,11 @@ export class WssRoom {
    * @param {msg} msg client message
    * @returns {boolean} boolean
    */
-  public broadcast(client: io.Socket, event: string, msg: Record<string, unknown>): boolean {
+  public broadcast(
+    client: io.Socket,
+    event: string,
+    msg: Record<string, unknown>,
+  ): boolean {
     try {
       return client.broadcast.to(this.session_id).emit(event, msg);
     } catch (error) {
@@ -259,16 +280,26 @@ export class WssRoom {
       if (mediaClient.producerAudio && !mediaClient.producerAudio.closed) {
         mediaClient.producerAudio.close();
       }
-      if (mediaClient.producerTransport && !mediaClient.producerTransport.closed) {
+      if (
+        mediaClient.producerTransport &&
+        !mediaClient.producerTransport.closed
+      ) {
         mediaClient.producerTransport.close();
       }
-      if (mediaClient.consumerTransport && !mediaClient.consumerTransport.closed) {
+      if (
+        mediaClient.consumerTransport &&
+        !mediaClient.consumerTransport.closed
+      ) {
         mediaClient.consumerTransport.close();
       }
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'WssRoom - closeMediaClient');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'WssRoom - closeMediaClient',
+      );
     }
   }
 
@@ -278,9 +309,12 @@ export class WssRoom {
    * @param {io.Socket} client client
    * @returns {Promise<boolean>} Promise<boolean>
    */
-  public async addClient(query: IClientQuery, client: io.Socket): Promise<boolean> {
+  public async addClient(
+    query: IClientQuery,
+    client: io.Socket,
+  ): Promise<boolean> {
     try {
-      this.logger.info(`${query.user_id} connected to room ${this.session_id}`);
+      this.logger.log(`${query.user_id} connected to room ${this.session_id}`);
 
       this.clients.set(query.user_id, {
         io: client,
@@ -308,7 +342,7 @@ export class WssRoom {
    */
   public async removeClient(user_id: string): Promise<boolean> {
     try {
-      this.logger.info(`${user_id} disconnected from room ${this.session_id}`);
+      this.logger.log(`${user_id} disconnected from room ${this.session_id}`);
 
       const user = this.clients.get(user_id);
 
@@ -340,7 +374,10 @@ export class WssRoom {
    * @param {IMsMessage} msg message
    * @returns {Promise<Record<string, unknown> | boolean>} Promise<Record<string, unknown> | boolean>
    */
-  public async speakMsClient(user_id: string, msg: IMsMessage): Promise<Record<string, unknown> | string[] | boolean> {
+  public async speakMsClient(
+    user_id: string,
+    msg: IMsMessage,
+  ): Promise<Record<string, unknown> | string[] | boolean> {
     try {
       switch (msg.action) {
         case 'getRouterRtpCapabilities':
@@ -348,14 +385,20 @@ export class WssRoom {
             routerRtpCapabilities: this.getRouterRtpCapabilities,
           };
         case 'createWebRtcTransport':
-          return await this.createWebRtcTransport(msg.data as { type: TPeer }, user_id);
+          return await this.createWebRtcTransport(
+            msg.data as { type: TPeer },
+            user_id,
+          );
         case 'connectWebRtcTransport':
           return await this.connectWebRtcTransport(
             msg.data as { dtlsParameters: DtlsParameters; type: TPeer },
             user_id,
           );
         case 'produce':
-          return await this.produce(msg.data as { rtpParameters: RTCRtpParameters; kind: MediaKind }, user_id);
+          return await this.produce(
+            msg.data as { rtpParameters: RTCRtpParameters; kind: MediaKind },
+            user_id,
+          );
         case 'consume':
           return await this.consume(
             msg.data as {
@@ -368,32 +411,64 @@ export class WssRoom {
         case 'restartIce':
           return await this.restartIce(msg.data as { type: TPeer }, user_id);
         case 'requestConsumerKeyFrame':
-          return await this.requestConsumerKeyFrame(msg.data as { user_id: string }, user_id);
+          return await this.requestConsumerKeyFrame(
+            msg.data as { user_id: string },
+            user_id,
+          );
         case 'getTransportStats':
-          return await this.getTransportStats(msg.data as { type: TPeer }, user_id);
+          return await this.getTransportStats(
+            msg.data as { type: TPeer },
+            user_id,
+          );
         case 'getProducerStats':
-          return await this.getProducerStats(msg.data as { user_id: string; kind: MediaKind }, user_id);
+          return await this.getProducerStats(
+            msg.data as { user_id: string; kind: MediaKind },
+            user_id,
+          );
         case 'getConsumerStats':
-          return await this.getConsumerStats(msg.data as { user_id: string; kind: MediaKind }, user_id);
+          return await this.getConsumerStats(
+            msg.data as { user_id: string; kind: MediaKind },
+            user_id,
+          );
         case 'getAudioProducerIds':
           return await this.getAudioProducerIds(user_id);
         case 'getVideoProducerIds':
           return await this.getVideoProducerIds(user_id);
         case 'producerClose':
-          return await this.producerClose(msg.data as { user_id: string; kind: MediaKind }, user_id);
+          return await this.producerClose(
+            msg.data as { user_id: string; kind: MediaKind },
+            user_id,
+          );
         case 'producerPause':
-          return await this.producerPause(msg.data as { user_id: string; kind: MediaKind }, user_id);
+          return await this.producerPause(
+            msg.data as { user_id: string; kind: MediaKind },
+            user_id,
+          );
         case 'producerResume':
-          return await this.producerResume(msg.data as { user_id: string; kind: MediaKind }, user_id);
+          return await this.producerResume(
+            msg.data as { user_id: string; kind: MediaKind },
+            user_id,
+          );
         case 'allProducerClose':
-          return await this.allProducerClose(msg.data as { kind: MediaKind }, user_id);
+          return await this.allProducerClose(
+            msg.data as { kind: MediaKind },
+            user_id,
+          );
         case 'allProducerPause':
-          return await this.allProducerPause(msg.data as { kind: MediaKind }, user_id);
+          return await this.allProducerPause(
+            msg.data as { kind: MediaKind },
+            user_id,
+          );
         case 'allProducerResume':
-          return await this.allProducerResume(msg.data as { kind: MediaKind }, user_id);
+          return await this.allProducerResume(
+            msg.data as { kind: MediaKind },
+            user_id,
+          );
       }
 
-      throw new Error(`Couldn't find Mediasoup Event with 'name'=${msg.action}`);
+      throw new Error(
+        `Couldn't find Mediasoup Event with 'name'=${msg.action}`,
+      );
     } catch (error) {
       this.logger.error(error.message, error.stack, 'MediasoupHelper - commit');
       return false;
@@ -406,16 +481,22 @@ export class WssRoom {
    * @param {string} user_id sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async createWebRtcTransport(data: { type: TPeer }, user_id: string): Promise<Record<string, unknown>> {
+  private async createWebRtcTransport(
+    data: { type: TPeer },
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} createWebRtcTransport - ${data.type}`);
+      this.logger.log(
+        `room ${this.session_id} createWebRtcTransport - ${data.type}`,
+      );
 
       const user = this.clients.get(user_id);
 
-      const { initialAvailableOutgoingBitrate } = mediasoupSettings.webRtcTransport;
+      const { initialAvailableOutgoingBitrate } =
+        this.mediasoupSettings.webRtcTransport;
 
       const transport = await this.router.createWebRtcTransport({
-        listenIps: mediasoupSettings.webRtcTransport.listenIps,
+        listenIps: this.mediasoupSettings.webRtcTransport.listenIps,
         enableUdp: true,
         enableSctp: true,
         enableTcp: true,
@@ -444,7 +525,11 @@ export class WssRoom {
         type: data.type,
       };
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - createWebRtcTransport');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - createWebRtcTransport',
+      );
     }
   }
 
@@ -459,7 +544,9 @@ export class WssRoom {
     user_id: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} connectWebRtcTransport - ${data.type}`);
+      this.logger.log(
+        `room ${this.session_id} connectWebRtcTransport - ${data.type}`,
+      );
 
       const user = this.clients.get(user_id);
 
@@ -484,7 +571,11 @@ export class WssRoom {
 
       return {};
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - connectWebRtcTransport');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - connectWebRtcTransport',
+      );
     }
   }
 
@@ -499,14 +590,16 @@ export class WssRoom {
     user_id: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} produce - ${data.kind}`);
+      this.logger.log(`room ${this.session_id} produce - ${data.kind}`);
 
       const user = this.clients.get(user_id);
 
       const transport = user.media.producerTransport;
 
       if (!transport) {
-        throw new Error(`Couldn't find producer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`);
+        throw new Error(
+          `Couldn't find producer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+        );
       }
 
       const producer = await transport.produce({
@@ -529,23 +622,32 @@ export class WssRoom {
       this.broadcast(user.io, 'mediaProduce', { user_id, kind: data.kind });
 
       if (data.kind === 'video') {
-        producer.on('videoorientationchange', (videoOrientation: ProducerVideoOrientation) => {
-          this.broadcastAll('mediaVideoOrientationChange', {
-            user_id,
-            videoOrientation,
-          });
-        });
+        producer.on(
+          'videoorientationchange',
+          (videoOrientation: ProducerVideoOrientation) => {
+            this.broadcastAll('mediaVideoOrientationChange', {
+              user_id,
+              videoOrientation,
+            });
+          },
+        );
       }
 
       producer.on('score', (score: ProducerScore[]) => {
-        this.logger.info(
-          `room ${this.session_id} user ${user_id} producer ${data.kind} score ${JSON.stringify(score)}`,
+        this.logger.log(
+          `room ${this.session_id} user ${user_id} producer ${
+            data.kind
+          } score ${JSON.stringify(score)}`,
         );
       });
 
       return {};
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - produce');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - produce',
+      );
     }
   }
 
@@ -564,7 +666,7 @@ export class WssRoom {
     user_id: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} produce - ${data.kind}`);
+      this.logger.log(`room ${this.session_id} produce - ${data.kind}`);
 
       const user = this.clients.get(user_id);
       const target = this.clients.get(data.user_id);
@@ -596,7 +698,9 @@ export class WssRoom {
       const transport = user.media.consumerTransport;
 
       if (!transport) {
-        throw new Error(`Couldn't find consumer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`);
+        throw new Error(
+          `Couldn't find consumer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+        );
       }
 
       const consumer = await transport.consume({
@@ -668,14 +772,18 @@ export class WssRoom {
       });
 
       consumer.on('score', (score: ConsumerScore[]) => {
-        this.logger.info(
-          `room ${this.session_id} user ${user_id} consumer ${data.kind} score ${JSON.stringify(score)}`,
+        this.logger.log(
+          `room ${this.session_id} user ${user_id} consumer ${
+            data.kind
+          } score ${JSON.stringify(score)}`,
         );
       });
 
       consumer.on('layerschange', (layers: ConsumerLayers | null) => {
-        this.logger.info(
-          `room ${this.session_id} user ${user_id} consumer ${data.kind} layerschange ${JSON.stringify(layers)}`,
+        this.logger.log(
+          `room ${this.session_id} user ${user_id} consumer ${
+            data.kind
+          } layerschange ${JSON.stringify(layers)}`,
         );
       });
 
@@ -692,7 +800,11 @@ export class WssRoom {
         producerPaused: consumer.producerPaused,
       };
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - consume');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - consume',
+      );
     }
   }
 
@@ -703,9 +815,12 @@ export class WssRoom {
    * @param {string} user_id sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async restartIce(data: { type: TPeer }, user_id: string): Promise<Record<string, unknown>> {
+  private async restartIce(
+    data: { type: TPeer },
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} restartIce - ${data.type}`);
+      this.logger.log(`room ${this.session_id} restartIce - ${data.type}`);
 
       const user = this.clients.get(user_id);
 
@@ -730,7 +845,11 @@ export class WssRoom {
 
       return { ...iceParameters };
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - restartIce');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - restartIce',
+      );
     }
   }
 
@@ -740,21 +859,30 @@ export class WssRoom {
    * @param {string} user_id sender of the message
    * @returns {Promise<boolean>} Promise<boolean>
    */
-  private async requestConsumerKeyFrame(data: { user_id: string }, user_id: string): Promise<boolean> {
+  private async requestConsumerKeyFrame(
+    data: { user_id: string },
+    user_id: string,
+  ): Promise<boolean> {
     try {
       const user = this.clients.get(user_id);
 
       const consumer: Consumer = user.media.consumersVideo.get(data.user_id);
 
       if (!consumer) {
-        throw new Error(`Couldn't find video consumer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`);
+        throw new Error(
+          `Couldn't find video consumer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
+        );
       }
 
       await consumer.requestKeyFrame();
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - requestConsumerKeyFrame');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - requestConsumerKeyFrame',
+      );
     }
   }
 
@@ -764,9 +892,14 @@ export class WssRoom {
    * @param {string} user_id sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async getTransportStats(data: { type: TPeer }, user_id: string): Promise<Record<string, unknown>> {
+  private async getTransportStats(
+    data: { type: TPeer },
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} getTransportStats - ${data.type}`);
+      this.logger.log(
+        `room ${this.session_id} getTransportStats - ${data.type}`,
+      );
 
       const user = this.clients.get(user_id);
 
@@ -791,7 +924,11 @@ export class WssRoom {
 
       return { ...data, stats };
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - getTransportStats');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - getTransportStats',
+      );
     }
   }
 
@@ -807,7 +944,9 @@ export class WssRoom {
     _user_id: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} getProducerStats - ${data.kind}`);
+      this.logger.log(
+        `room ${this.session_id} getProducerStats - ${data.kind}`,
+      );
 
       const target_user = this.clients.get(data.user_id);
 
@@ -832,7 +971,11 @@ export class WssRoom {
 
       return { ...data, stats };
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - getProducerStats');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - getProducerStats',
+      );
     }
   }
 
@@ -848,7 +991,9 @@ export class WssRoom {
     user_id: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.info(`room ${this.session_id} getProducerStats - ${data.kind}`);
+      this.logger.log(
+        `room ${this.session_id} getProducerStats - ${data.kind}`,
+      );
 
       const user = this.clients.get(user_id);
 
@@ -873,7 +1018,11 @@ export class WssRoom {
 
       return { ...data, stats };
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - getConsumerStats');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - getConsumerStats',
+      );
     }
   }
 
@@ -886,7 +1035,11 @@ export class WssRoom {
     try {
       return this.videoProducerIds;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - getVideoProducerIds');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - getVideoProducerIds',
+      );
     }
   }
 
@@ -899,7 +1052,11 @@ export class WssRoom {
     try {
       return this.audioProducerIds;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - getAudioProducerIds');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - getAudioProducerIds',
+      );
     }
   }
 
@@ -909,7 +1066,10 @@ export class WssRoom {
    * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
-  private async producerClose(data: { user_id: string; kind: MediaKind }, _user_id: string): Promise<boolean> {
+  private async producerClose(
+    data: { user_id: string; kind: MediaKind },
+    _user_id: string,
+  ): Promise<boolean> {
     try {
       const target_user = this.clients.get(data.user_id);
 
@@ -932,7 +1092,11 @@ export class WssRoom {
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - producerClose');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - producerClose',
+      );
     }
   }
 
@@ -942,7 +1106,10 @@ export class WssRoom {
    * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
-  private async producerPause(data: { user_id: string; kind: MediaKind }, _user_id: string): Promise<boolean> {
+  private async producerPause(
+    data: { user_id: string; kind: MediaKind },
+    _user_id: string,
+  ): Promise<boolean> {
     try {
       const target_user = this.clients.get(data.user_id);
 
@@ -965,7 +1132,11 @@ export class WssRoom {
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - producerPause');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - producerPause',
+      );
     }
   }
 
@@ -975,7 +1146,10 @@ export class WssRoom {
    * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
-  private async producerResume(data: { user_id: string; kind: MediaKind }, _user_id: string): Promise<boolean> {
+  private async producerResume(
+    data: { user_id: string; kind: MediaKind },
+    _user_id: string,
+  ): Promise<boolean> {
     try {
       const target_user = this.clients.get(data.user_id);
 
@@ -991,7 +1165,11 @@ export class WssRoom {
             break;
         }
 
-        if (target_producer && target_producer.paused && !target_producer.closed) {
+        if (
+          target_producer &&
+          target_producer.paused &&
+          !target_producer.closed
+        ) {
           await target_producer.resume();
         } else if (target_producer && target_producer.closed) {
           target_user.io.emit('mediaReproduce', { kind: data.kind });
@@ -1000,7 +1178,11 @@ export class WssRoom {
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - producerResume');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - producerResume',
+      );
     }
   }
 
@@ -1010,7 +1192,10 @@ export class WssRoom {
    * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
-  private async allProducerClose(data: { kind: MediaKind }, _user_id: string): Promise<boolean> {
+  private async allProducerClose(
+    data: { kind: MediaKind },
+    _user_id: string,
+  ): Promise<boolean> {
     try {
       this.clients.forEach(async (client) => {
         if (client.media) {
@@ -1033,7 +1218,11 @@ export class WssRoom {
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - allProducerClose');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - allProducerClose',
+      );
     }
   }
 
@@ -1043,7 +1232,10 @@ export class WssRoom {
    * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
-  private async allProducerPause(data: { kind: MediaKind }, _user_id: string): Promise<boolean> {
+  private async allProducerPause(
+    data: { kind: MediaKind },
+    _user_id: string,
+  ): Promise<boolean> {
     try {
       this.clients.forEach(async (client) => {
         if (client.media) {
@@ -1066,7 +1258,11 @@ export class WssRoom {
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - allProducerPause');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - allProducerPause',
+      );
     }
   }
 
@@ -1076,7 +1272,10 @@ export class WssRoom {
    * @param {string} _user_id sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
-  private async allProducerResume(data: { kind: MediaKind }, _user_id: string): Promise<boolean> {
+  private async allProducerResume(
+    data: { kind: MediaKind },
+    _user_id: string,
+  ): Promise<boolean> {
     try {
       this.clients.forEach(async (client) => {
         if (client.media) {
@@ -1091,7 +1290,11 @@ export class WssRoom {
               break;
           }
 
-          if (target_producer && target_producer.paused && !target_producer.closed) {
+          if (
+            target_producer &&
+            target_producer.paused &&
+            !target_producer.closed
+          ) {
             await target_producer.resume();
           } else if (target_producer && target_producer.closed) {
             client.io.emit('mediaReproduce', { kind: data.kind });
@@ -1101,7 +1304,11 @@ export class WssRoom {
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - allProducerResume');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - allProducerResume',
+      );
     }
   }
 
@@ -1111,11 +1318,15 @@ export class WssRoom {
    */
   private async updateMaxIncomingBitrate(): Promise<boolean> {
     try {
-      const { minimumAvailableOutgoingBitrate, maximumAvailableOutgoingBitrate, factorIncomingBitrate } =
-        mediasoupSettings.webRtcTransport;
+      const {
+        minimumAvailableOutgoingBitrate,
+        maximumAvailableOutgoingBitrate,
+        factorIncomingBitrate,
+      } = this.mediasoupSettings.webRtcTransport;
 
       let newMaxIncomingBitrate = Math.round(
-        maximumAvailableOutgoingBitrate / ((this.producerIds.length - 1) * factorIncomingBitrate),
+        maximumAvailableOutgoingBitrate /
+          ((this.producerIds.length - 1) * factorIncomingBitrate),
       );
 
       if (newMaxIncomingBitrate < minimumAvailableOutgoingBitrate) {
@@ -1128,18 +1339,32 @@ export class WssRoom {
 
       this.clients.forEach((client) => {
         if (client.media) {
-          if (client.media.producerTransport && !client.media.producerTransport.closed) {
-            client.media.producerTransport.setMaxIncomingBitrate(newMaxIncomingBitrate);
+          if (
+            client.media.producerTransport &&
+            !client.media.producerTransport.closed
+          ) {
+            client.media.producerTransport.setMaxIncomingBitrate(
+              newMaxIncomingBitrate,
+            );
           }
-          if (client.media.consumerTransport && !client.media.consumerTransport.closed) {
-            client.media.consumerTransport.setMaxIncomingBitrate(newMaxIncomingBitrate);
+          if (
+            client.media.consumerTransport &&
+            !client.media.consumerTransport.closed
+          ) {
+            client.media.consumerTransport.setMaxIncomingBitrate(
+              newMaxIncomingBitrate,
+            );
           }
         }
       });
 
       return true;
     } catch (error) {
-      this.logger.error(error.message, error.stack, 'MediasoupHelper - updateMaxBitrate');
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - updateMaxBitrate',
+      );
     }
   }
 }

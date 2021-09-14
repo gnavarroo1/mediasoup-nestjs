@@ -16,7 +16,8 @@ export class LoggerService extends Logger {
   constructor(private readonly _context?: string) {
     super(_context);
     const config = new ConfigService(configuration());
-    this._currentLevel = ELogLevel[config.get<ILogSettings>('LOGGER_SETTINGS').level];
+    this._currentLevel =
+      ELogLevel[config.get<ILogSettings>('LOGGER_SETTINGS').level];
   }
 
   public log(message: any, context?: string) {
@@ -39,7 +40,11 @@ export class LoggerService extends Logger {
 
   public error(message: any, trace?: string, context?: string) {
     if (this.isValidLevel(ELogLevel.error)) {
-      Logger.error(JSON.stringify(message, null, 2), trace, context || this._context);
+      Logger.error(
+        JSON.stringify(message, null, 2),
+        trace,
+        context || this._context,
+      );
     }
   }
 

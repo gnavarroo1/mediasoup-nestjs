@@ -1,14 +1,17 @@
-import config from 'config';
 import { stringify } from 'query-string';
+import { ConfigService } from '@nestjs/config';
+import configuration from '../../config/configuration';
 
-const appSettings = config.get<IAppSettings>('APP_SETTINGS');
+const appSettings = new ConfigService(configuration()).get<IAppSettings>('APP_SETTINGS');
 
 /**
- * Подставляет clint и query в юрл.
- * @param {string} url юрл-ресурса
- * @param {object} query query-параметры
+ * Substitutes client and query in jUrl.
+ * @param {string} url jUrl resource
+ * @param {object} query query parameters
  * @returns {string} url.
  */
-export const createUrlWithQuery = (url: string, query: object = {}): string => {
-  return `${url}?${stringify({ ...appSettings.client })}&${stringify({ ...query })}`;
+export const createUrlWithQuery = (url: string, query: Record<string, unknown> = {}): string => {
+  return `${url}?${stringify({ ...appSettings.client })}&${stringify({
+    ...query,
+  })}`;
 };

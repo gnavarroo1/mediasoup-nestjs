@@ -1,9 +1,8 @@
 import { Request, Response } from 'express';
 
-// tslint:disable: no-feature-envy
 export class ReqHelper {
   public getIp(req: Request): string {
-    return req.ip || (req.connection && req.connection.remoteAddress) || '-';
+    return req.ip || (req.socket && req.socket.remoteAddress) || '-';
   }
 
   public getUrl(req: Request): string {
