@@ -34,8 +34,8 @@ export default registerAs('app', () => ({
   MEDIASOUP_SETTINGS: {
     workerPool: 3,
     worker: {
-      rtcMinPort: 10000,
-      rtcMaxPort: 10100,
+      rtcMinPort: process.env.RTC_MIN_PORT,
+      rtcMaxPort: process.env.RTC_MAX_PORT,
       logLevel: 'warn',
       logTags: ['info', 'ice', 'dtls', 'rtp', 'srtp', 'rtcp'],
     },
