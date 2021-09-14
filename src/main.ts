@@ -15,8 +15,8 @@ async function bootstrap() {
   };
   if (process.env.ENVIRONMENT !== 'DEVELOPMENT') {
     httpsOptions = {
-      key: fs.readFileSync('./secrets/private-key.pem'),
-      cert: fs.readFileSync('./secrets/public-certificate.pem'),
+      key: fs.readFileSync(process.env.DTLSPRIVATEKEYFILE),
+      cert: fs.readFileSync(process.env.DTLSCERTIFICATEFILE),
     };
   }
 
