@@ -19,10 +19,8 @@ import configuration from '../config/configuration';
 import { AppConfigService } from '../config/config.service';
 const config: ConfigService = new ConfigService(configuration());
 const appSettings = config.get<IAppSettings>('APP_SETTINGS');
-const mediasoupSettings = config.get<IMediasoupSettings>('MEDIASOUP_SETTINGS');
-const wssPort: number = +process.env.WSS_PORT;
 
-@WebSocketGateway(wssPort, {
+@WebSocketGateway({
   cors: {
     methods: ['GET', 'POST'],
   },
