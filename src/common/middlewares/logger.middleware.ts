@@ -4,11 +4,11 @@ import { ReqHelper } from '../helpers/req.helper';
 import { LoggerService } from '../../logger/logger.service';
 import { ConfigService } from '@nestjs/config';
 import { AppConfigService } from '../../config/config.service';
+import { ILogSettings } from '../../../types/global';
 
 @Injectable()
 export class LoggerMiddleware extends ReqHelper implements NestMiddleware {
   private _settings: ILogSettings;
-
   constructor(
     private readonly logger: LoggerService,
     private config: AppConfigService,
@@ -26,11 +26,9 @@ export class LoggerMiddleware extends ReqHelper implements NestMiddleware {
     req.on('error', (error: Error) => {
       this.logMethodByStatus(error.message, error.stack, req.statusCode);
     });
-
     res.on('error', (error: Error) => {
       this.logMethodByStatus(error.message, error.stack, res.statusCode);
     });
-
     res.on('finish', () => {
       const message = {
         path: `${req.method} ${this.getUrl(req)}`,
@@ -39,10 +37,8 @@ export class LoggerMiddleware extends ReqHelper implements NestMiddleware {
         remoteAddress: this.getIp(req),
         status: `${res.statusCode} ${res.statusMessage}`,
       };
-
       this.logMethodByStatus(message, '', res.statusCode);
     });
-
     return next();
   }
 

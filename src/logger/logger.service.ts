@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import configuration from '../config/configuration';
+import { ILogSettings } from '../../types/global';
 
 enum ELogLevel {
   debug,

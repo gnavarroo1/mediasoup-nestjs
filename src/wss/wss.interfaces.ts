@@ -1,10 +1,12 @@
 import { Socket } from 'socket.io';
 import { Consumer, Producer, WebRtcTransport } from 'mediasoup/lib/types';
+import { RtpCapabilities } from 'mediasoup/lib/RtpParameters';
 
 export interface IClientQuery {
   readonly user_id: string;
   readonly session_id: string;
   readonly device: string;
+  readonly kind: string;
 }
 
 export interface IClient {
@@ -12,6 +14,7 @@ export interface IClient {
   io: Socket;
   media?: IMediasoupClient;
   device: string;
+  rtpCapabilities?: RtpCapabilities;
 }
 
 export interface IMediasoupClient {

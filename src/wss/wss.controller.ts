@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Headers, Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { throwNOTFOUND } from '../common/errors';
 import { WssGateway } from './wss.gateway';
 import * as pidusage from 'pidusage';
@@ -39,13 +39,17 @@ export class WssController {
   @Get('rooms/:id/change_worker')
   public async roomChangeWorker(@Param('id') id: string) {
     const room = this.wssGateway.rooms.get(id);
-
     if (room) {
       await this.wssGateway.reConfigureMedia(room);
 
       return { msg: 'ok' };
     }
-
     throwNOTFOUND();
   }
+
+  // @Post('message-connection-handler')
+  // public async meeting(@Headers() header: any, @Body() request: any) {
+  //   console.log(request);
+  //   return this.wssGateway.handleMediaEvent(request);
+  // }
 }

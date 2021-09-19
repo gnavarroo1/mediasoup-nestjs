@@ -14,8 +14,8 @@ export default registerAs('app', () => ({
       client_secret: '',
     },
     sslCrt:
-      process.env.HTTPS_CERT_FULLCHAIN || `${__dirname}/certs/fullchain.pem`,
-    sslKey: process.env.HTTPS_CERT_PRIVKEY || `${__dirname}/certs/privkey.pem`,
+      process.env.DTLSCERTIFICATEFILE || `${__dirname}/certs/fullchain.pem`,
+    sslKey: process.env.DTLSPRIVATEKEYFILE || `${__dirname}/certs/privkey.pem`,
   },
   CORS_SETTINGS: {
     allowedOrigins: [],
@@ -35,9 +35,9 @@ export default registerAs('app', () => ({
   MEDIASOUP_SETTINGS: {
     workerPool: Object.keys(os.cpus()).length,
     worker: {
-      rtcMinPort: process.env.RTC_MIN_PORT || 40000,
-      rtcMaxPort: process.env.RTC_MAX_PORT || 49999,
-      logLevel: 'warn',
+      rtcMinPort: 40000,
+      rtcMaxPort: 49999,
+      logLevel: 'debug',
       logTags: [
         'info',
         'ice',
@@ -71,44 +71,15 @@ export default registerAs('app', () => ({
             'x-google-start-bitrate': 1000,
           },
         },
-        {
-          kind: 'video',
-          mimeType: 'video/VP9',
-          clockRate: 90000,
-          parameters: {
-            'profile-id': 2,
-            'x-google-start-bitrate': 1000,
-          },
-        },
-        {
-          kind: 'video',
-          mimeType: 'video/h264',
-          clockRate: 90000,
-          parameters: {
-            'packetization-mode': 1,
-            'profile-level-id': '4d0032',
-            'level-asymmetry-allowed': 1,
-            'x-google-start-bitrate': 1000,
-          },
-        },
-        {
-          kind: 'video',
-          mimeType: 'video/h264',
-          clockRate: 90000,
-          parameters: {
-            'packetization-mode': 1,
-            'profile-level-id': '42e01f',
-            'level-asymmetry-allowed': 1,
-            'x-google-start-bitrate': 1000,
-          },
-        },
       ],
     },
     webRtcTransport: {
       listenIps: [
         {
-          ip: process.env['MEDIASOUP_IP'],
-          announcedIp: null,
+          //private ip address set 127.0.0.1 on local
+          ip: process.env.MEDIASOUP_LISTEN_IP,
+          //public ip address set null on local
+          announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP,
         },
       ],
       initialAvailableOutgoingBitrate: 1000000,
@@ -121,7 +92,9 @@ export default registerAs('app', () => ({
     },
     plainTransportOptions: {
       listenIp: {
-        ip: process.env.MEDIASOUP_LISTEN_IP || '1.2.3.4',
+        //private ip address set 127.0.0.1 on local
+        ip: process.env.MEDIASOUP_LISTEN_IP,
+        //public ip address set null on local
         announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP,
       },
       maxSctpMessageSize: 262144,

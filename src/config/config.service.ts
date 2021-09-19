@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { IMediasoupSettings } from '../../types/global';
 /**
  * Service dealing with app config based operations.
  *

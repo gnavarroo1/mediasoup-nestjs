@@ -1,3 +1,5 @@
+import { MediaKind } from 'mediasoup/lib/RtpParameters';
+
 interface IAppSettings {
   readonly appPort: number;
   readonly wssPort: number;
@@ -58,4 +60,9 @@ interface IMediasoupSettings {
   readonly worker: IMediasoupWorkerSettings;
   readonly router: { mediaCodecs: IMediasoupMediacodecSettings[] };
   readonly webRtcTransport: IMediasoupWebRtcTransport;
+}
+
+interface IProducerRequest {
+  user_id: string;
+  kind: MediaKind;
 }

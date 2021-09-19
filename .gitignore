@@ -103,3 +103,4 @@ typings/
 
 # FuseBox cache
 .fusebox/
+/certs/

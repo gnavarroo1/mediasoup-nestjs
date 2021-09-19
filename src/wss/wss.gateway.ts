@@ -13,12 +13,10 @@ import * as mediasoup from 'mediasoup';
 import { Worker, WorkerSettings } from 'mediasoup/lib/types';
 import { WssRoom } from './wss.room';
 import { LoggerService } from '../logger/logger.service';
-import { IClientQuery, IMsMessage, IWorkerInfo } from './wss.interfaces';
-import { ConfigService } from '@nestjs/config';
-import configuration from '../config/configuration';
+import { IClientQuery, IWorkerInfo } from './wss.interfaces';
 import { AppConfigService } from '../config/config.service';
-const config: ConfigService = new ConfigService(configuration());
-const appSettings = config.get<IAppSettings>('APP_SETTINGS');
+import { IMediasoupSettings } from '../../types/global';
+import { MediasoupService } from './mediasoup.service';
 
 @WebSocketGateway({
   cors: {
@@ -41,7 +39,7 @@ export class WssGateway
     };
   };
   afterInit(): any {
-    this.logger.info(`Gateway started on port ${appSettings.wssPort}`);
+    this.logger.info(`Gateway started on port`);
   }
 
   constructor(
@@ -54,39 +52,7 @@ export class WssGateway
   }
 
   async handleConnection(@ConnectedSocket() client: Socket): Promise<void> {
-    this.logger.info(`client connected ${client.id}`);
-    try {
-      const { session_id, user_id, device } = this.getClientQuery(client);
-      let room = this.rooms.get(session_id);
-
-      if (!room) {
-        this.updateWorkerStats();
-        const index = this.getOptimalWorkerIndex();
-        room = new WssRoom(
-          this.mediasoupSettings,
-          this.workers[index].worker,
-          index,
-          session_id,
-          this.logger,
-          this.server,
-        );
-        await room.load();
-        this.rooms.set(session_id, room);
-        this.logger.info(`room ${session_id} created`);
-      } else {
-        this.logger.info(session_id, 'client connected to room');
-      }
-      await room.addClient(
-        { session_id: session_id, user_id: user_id, device: device },
-        client,
-      );
-    } catch (error) {
-      this.logger.error(
-        error.message,
-        error.stack,
-        'WssGateway - handleConnection',
-      );
-    }
+    this.logger.info(`User connected on ${client.id}`);
   }
 
   public async handleDisconnect(@ConnectedSocket() client: Socket) {
@@ -123,7 +89,6 @@ export class WssGateway
       }),
     ) as { [pid: string]: IWorkerInfo };
   }
-
   /**
    * Creates mediasoup workers.
    * @returns {Promise<void>} Promise<void>
@@ -214,9 +179,55 @@ export class WssGateway
     }
   }
 
-  private getClientQuery(@ConnectedSocket() client: Socket): IClientQuery {
+  private getClientQuery(client: Socket): IClientQuery {
     return client.handshake.query as unknown as IClientQuery;
   }
+
+  @SubscribeMessage('joinRoom')
+  async handleJoinRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: any,
+  ): Promise<any> {
+    this.logger.info(`client connected ${client.id}`);
+    try {
+      const { session_id, user_id, device } = this.getClientQuery(client);
+      let room = this.rooms.get(session_id);
+
+      if (!room) {
+        this.updateWorkerStats();
+        const index = this.getOptimalWorkerIndex();
+        room = new WssRoom(
+          this.mediasoupSettings,
+          this.workers[index].worker,
+          index,
+          session_id,
+          this.logger,
+          this.server,
+        );
+        await room.load();
+        this.rooms.set(session_id, room);
+        this.logger.info(`room ${session_id} created`);
+      } else {
+        this.logger.info(session_id, 'client connected to room');
+      }
+      return await room.addClient(
+        {
+          session_id: session_id,
+          user_id: user_id,
+          device: device,
+          kind: payload.kind,
+        },
+        client,
+      );
+    } catch (error) {
+      this.logger.error(
+        error.message,
+        error.stack,
+        'WssGateway - handleConnection',
+      );
+    }
+  }
+
   @SubscribeMessage('mediaRoomClients')
   public async roomClients(@ConnectedSocket() client: Socket) {
     try {
@@ -244,24 +255,16 @@ export class WssGateway
   }
 
   @SubscribeMessage('media')
-  public async media(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: IMsMessage,
-  ): Promise<void> {
-    // const event = 'media';
+  public async media(client: Socket, data: any): Promise<any> {
     const { user_id, session_id } = this.getClientQuery(client);
     try {
+      this.logger.info(
+        `the client ${user_id}, requested action ${data.action} `,
+        'speakmsclient',
+      );
       const room = this.rooms.get(session_id);
-      if (room) {
-        const d = await room.speakMsClient(user_id, data);
-        this.server.to(client.id).emit('media', {
-          action: data.action,
-          data: d,
-          user_id: data.data?.user_id,
-          type: data.data?.type,
-          kind: data.data?.kind,
-        });
-      }
+
+      return await room.speakMsClient(user_id, data);
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssGateway - media');
     }
@@ -285,4 +288,38 @@ export class WssGateway
       );
     }
   }
+
+  @SubscribeMessage('handshake')
+  public mediaClientConnectedHandshake(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: any,
+  ) {
+    const { user_id, session_id } = this.getClientQuery(client);
+    this.logger.warn('handshake requested from', user_id);
+    const room = this.rooms.get(session_id);
+    if (room) {
+      room.broadcastAll('mediaClientConnected', {
+        id: user_id,
+        kind: payload.kind,
+      });
+    }
+  }
+
+  @SubscribeMessage('ping')
+  public test(client: Socket, data: any): string {
+    try {
+      console.log(data);
+      return 'hola';
+    } catch (error) {
+      this.logger.error(error.message, error.stack, 'WssGateway - media');
+    }
+  }
+
+  // async handleMediaEvent(payload: {
+  //   user_id: string;
+  //   session_id: string;
+  //   data: any;
+  // }): Promise<any> {
+  //   return await .handleMediaEvent(payload);
+  // }
 }
