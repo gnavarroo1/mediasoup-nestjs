@@ -72,10 +72,10 @@ export class MediasoupGateway
   public async media(client: Socket, data: any): Promise<any> {
     const { user_id, session_id } = this.getClientQuery(client);
     try {
-      this.logger.info(
-        `the client ${user_id}, requested action ${data.action} `,
-        'speakmsclient',
-      );
+      // this.logger.info(
+      //   `the client ${user_id}, requested action ${data.action} `,
+      //   'speakmsclient',
+      // );
       return await this.mediasoupService.handleMedia(client, {
         data,
         session_id: session_id,
@@ -92,7 +92,6 @@ export class MediasoupGateway
     @MessageBody() payload: { kind: TKind; rtpCapabilities: RtpCapabilities },
   ): Promise<any> {
     const { user_id, session_id, device } = this.getClientQuery(client);
-    this.logger.info(payload, 'HANDLE JOIN ROOM');
     const res = await this.mediasoupService.joinRoom({
       user_id,
       session_id,

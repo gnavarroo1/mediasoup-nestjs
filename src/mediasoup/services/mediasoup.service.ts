@@ -234,26 +234,9 @@ export class MediasoupService {
   }
 
   public async handleMedia(client: Socket, data: any): Promise<any> {
-    this.logger.warn(data, 'handleMedia for session');
     const room = this._rooms.get(data.session_id);
-
     if (room) {
       return room.speakMsClient(data.user_id, data.data);
     }
   }
-  //   @SubscribeMessage('media')
-  //   public async media(client: Socket, data: any): Promise<any> {
-  //     const { user_id, session_id } = this.getClientQuery(client);
-  //     try {
-  //       this.logger.info(
-  //         `the client ${user_id}, requested action ${data.action} `,
-  //         'speakmsclient',
-  //       );
-  //       const room = this.rooms.get(session_id);
-  //
-  //       return await room.speakMsClient(user_id, data);
-  //     } catch (error) {
-  //       this.logger.error(error.message, error.stack, 'WssGateway - media');
-  //     }
-  //   }
 }

@@ -57,9 +57,6 @@ export interface IMsMessage {
 }
 
 export type TPeer = {
-  forceTcp: boolean;
-  producing: boolean;
-  consuming: boolean;
   type: TKind;
 };
 export class SocketTimeoutError extends Error {
