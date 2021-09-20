@@ -1,4 +1,4 @@
-import io from 'socket.io';
+import { Socket, Server } from 'socket.io';
 import { MediaKind, RtpCapabilities } from 'mediasoup/lib/RtpParameters';
 import {
   AudioLevelObserver,
@@ -15,50 +15,168 @@ import {
   Worker,
 } from 'mediasoup/lib/types';
 
-type TPeer = {
-  forceTcp: boolean;
-  producing: boolean;
-  consuming: boolean;
-  type: 'producer' | 'consumer';
-};
 import {
   IClient,
   IClientQuery,
   IMediasoupClient,
   IMsMessage,
-} from './wss.interfaces';
-import { LoggerService } from '../logger/logger.service';
-import { IMediasoupSettings, IProducerRequest } from '../../types/global';
-class SocketTimeoutError extends Error {
-  constructor(message) {
-    super(message);
+  RoomClient,
+  SocketTimeoutError,
+  TPeer,
+} from './mediasoup.types';
 
-    this.name = 'SocketTimeoutError';
+import { LoggerService } from '../../logger/logger.service';
+import {
+  IMediasoupMediacodecSettings,
+  IMediasoupSettings,
+  IMediasoupWebRtcTransport,
+  IProducerRequest,
+} from '../../../types/global';
+import { AppConfigService } from '../../config/config.service';
 
-    if (Error.hasOwnProperty('captureStackTrace'))
-      // Just in V8.
-      Error.captureStackTrace(this, SocketTimeoutError);
-    else this.stack = new Error(message).stack;
+export class MediasoupRoom {
+  get clients(): Map<string, RoomClient> {
+    return this._clients;
   }
-}
-export class WssRoom {
-  public readonly clients: Map<string, IClient> = new Map();
-  public router: Router;
-  public audioLevelObserver: AudioLevelObserver;
+  get router(): Router {
+    return this._router;
+  }
+
+  set router(value: Router) {
+    this._router = value;
+  }
+
+  get audioLevelObserver(): AudioLevelObserver {
+    return this._audioLevelObserver;
+  }
+
+  set audioLevelObserver(value: AudioLevelObserver) {
+    this._audioLevelObserver = value;
+  }
+
+  get worker(): Worker {
+    return this._worker;
+  }
+
+  set worker(value: Worker) {
+    this._worker = value;
+  }
+
+  get workerIndex(): number {
+    return this._workerIndex;
+  }
+
+  set workerIndex(value: number) {
+    this._workerIndex = value;
+  }
+
+  get session_id(): string {
+    return this._session_id;
+  }
+
+  set session_id(value: string) {
+    this._session_id = value;
+  }
+
+  get clientsCount(): number {
+    return this._clients.size;
+  }
+
+  get clientsIds(): string[] {
+    return Array.from(this._clients.keys());
+  }
+
+  get audioProducerIds(): string[] {
+    return Array.from(this._clients.values())
+      .filter((c) => {
+        if (c.media && c.media.producerAudio && !c.media.producerAudio.closed) {
+          return true;
+        }
+
+        return false;
+      })
+      .map((c) => c.id);
+  }
+
+  get videoProducerIds(): string[] {
+    return Array.from(this._clients.values())
+      .filter((c) => {
+        if (c.media && c.media.producerVideo && !c.media.producerVideo.closed) {
+          return true;
+        }
+
+        return false;
+      })
+      .map((c) => c.id);
+  }
+
+  get producerIds(): string[] {
+    return Array.from(this._clients.values())
+      .filter((c) => {
+        if (c.media) {
+          if (c.media.producerVideo || c.media.producerAudio) {
+            return true;
+          } else {
+            return false;
+          }
+        } else {
+          return false;
+        }
+      })
+      .map((c) => c.id);
+  }
+
+  get getRouterRtpCapabilities(): RtpCapabilities {
+    return this._router.rtpCapabilities;
+  }
+
+  get stats() {
+    const clientsArray = Array.from(this._clients.values());
+
+    return {
+      id: this.session_id,
+      worker: this.workerIndex,
+      clients: clientsArray.map((c) => ({
+        id: c.id,
+        device: c.device,
+        produceAudio: c.media.producerAudio ? true : false,
+        produceVideo: c.media.producerVideo ? true : false,
+      })),
+      groupByDevice: clientsArray.reduce((acc, curr) => {
+        if (!acc[curr.device]) {
+          acc[curr.device] = 1;
+        }
+
+        acc[curr.device] += 1;
+
+        return acc;
+      }, {}) as { [device: string]: number },
+    };
+  }
+
+  private _clients: Map<string, RoomClient> = new Map<string, RoomClient>();
+  private _router: Router;
+  private _audioLevelObserver: AudioLevelObserver;
+  private mediaCodecs: IMediasoupMediacodecSettings[];
+  private webRtcTransport: IMediasoupWebRtcTransport;
+  private _worker: Worker;
+  private _workerIndex: number;
+  private _session_id: string;
+
   constructor(
-    private mediasoupSettings: IMediasoupSettings,
-    private worker: Worker,
-    public workerIndex: number,
-    public readonly session_id: string,
     private readonly logger: LoggerService,
-    private readonly wssServer: io.Server,
-  ) {}
+    private readonly appConfig: AppConfigService,
+    private readonly wssServer: Server,
+  ) {
+    this.mediaCodecs = appConfig.mediasoupSettings.router.mediaCodecs;
+    this.webRtcTransport = appConfig.mediasoupSettings.webRtcTransport;
+  }
 
   private async configureWorker() {
     try {
       await this.worker
         .createRouter({
-          mediaCodecs: this.mediasoupSettings.router.mediaCodecs,
+          mediaCodecs: this.mediaCodecs,
         } as RouterOptions)
         .then((router) => {
           this.router = router;
@@ -97,82 +215,6 @@ export class WssRoom {
     }
   }
 
-  get clientsCount(): number {
-    return this.clients.size;
-  }
-
-  get clientsIds(): string[] {
-    return Array.from(this.clients.keys());
-  }
-
-  get audioProducerIds(): string[] {
-    return Array.from(this.clients.values())
-      .filter((c) => {
-        if (c.media && c.media.producerAudio && !c.media.producerAudio.closed) {
-          return true;
-        }
-
-        return false;
-      })
-      .map((c) => c.id);
-  }
-
-  get videoProducerIds(): string[] {
-    return Array.from(this.clients.values())
-      .filter((c) => {
-        if (c.media && c.media.producerVideo && !c.media.producerVideo.closed) {
-          return true;
-        }
-
-        return false;
-      })
-      .map((c) => c.id);
-  }
-
-  get producerIds(): string[] {
-    return Array.from(this.clients.values())
-      .filter((c) => {
-        if (c.media) {
-          if (c.media.producerVideo || c.media.producerAudio) {
-            return true;
-          } else {
-            return false;
-          }
-        } else {
-          return false;
-        }
-      })
-      .map((c) => c.id);
-  }
-
-  get getRouterRtpCapabilities(): RtpCapabilities {
-    return this.router.rtpCapabilities;
-  }
-
-  get stats() {
-    const clientsArray = Array.from(this.clients.values());
-
-    return {
-      id: this.session_id,
-      worker: this.workerIndex,
-      clients: clientsArray.map((c) => ({
-        id: c.id,
-        device: c.device,
-        produceAudio: c.media.producerAudio ? true : false,
-        produceVideo: c.media.producerVideo ? true : false,
-      })),
-      groupByDevice: clientsArray.reduce((acc, curr) => {
-        if (!acc[curr.device]) {
-          acc[curr.device] = 1;
-        }
-
-        acc[curr.device] += 1;
-
-        return acc;
-      }, {}) as { [device: string]: number },
-    };
-  }
-
   /**
    * Configures a worker.
    * @returns {Promise<void>} Promise<void>
@@ -184,7 +226,6 @@ export class WssRoom {
       this.logger.error(error.message, error.stack, 'WssRoom - load');
     }
   }
-
   /**
    * Closes the room, killing all connections to it.
    * @returns {void} void
@@ -214,7 +255,6 @@ export class WssRoom {
       this.logger.error(error.message, error.stack, 'WssRoom - close');
     }
   }
-
   /**
    * Changes the worker in the room.
    * @param {IWorker} worker worker
@@ -249,50 +289,6 @@ export class WssRoom {
       );
     }
   }
-
-  /**
-   * Sends messages from the client to everyone in the room.
-   * @param {io.Socket} client source client
-   * @param {string} event message event
-   * @param {msg} msg client message
-   * @returns {boolean} boolean
-   */
-  public broadcast(
-    client: io.Socket,
-    event: string,
-    msg: Record<string, unknown>,
-  ): boolean {
-    try {
-      return client.broadcast.to(this.session_id).emit(event, msg);
-    } catch (error) {
-      this.logger.error(error.message, error.stack, 'WssRoom - broadcast');
-    }
-  }
-
-  /**
-   * Sends messages from the client to everyone in the room, including him.
-   * @param {string} event event from the message
-   * @param {msg} msg client message
-   * @returns {boolean} boolean
-   */
-  public broadcastAll(event: string, msg: Record<string, unknown>): boolean {
-    try {
-      console.log(event);
-      console.log(msg);
-      return this.wssServer.to(this.session_id).emit(event, msg);
-    } catch (error) {
-      this.logger.error(error.message, error.stack, 'WssRoom - broadcastAll');
-    }
-  }
-
-  public notification(
-    client: io.Socket,
-    event: string,
-    payload: Record<string, unknown>,
-  ): void {
-    client.emit(event, payload);
-  }
-
   /**
    *  Kill all connections on the mediasoup client
    * @param {IMediasoupClient} mediaClient Data from the room at the mediasoup client
@@ -335,32 +331,67 @@ export class WssRoom {
    * @param {io.Socket} client client
    * @returns {Promise<boolean>} Promise<boolean>
    */
-  public async addClient(
-    query: IClientQuery,
-    client: io.Socket,
-  ): Promise<boolean> {
+  public addClient(query: IClientQuery, client: Socket, data: any): any {
     try {
+      if (this.clients.get(query.user_id)) {
+        throw new Error('Peer already joined');
+      }
       this.logger.log(`${query.user_id} connected to room ${this.session_id}`);
-
-      this.clients.set(query.user_id, {
-        io: client,
-        id: query.user_id,
-        device: query.device,
-        media: {
-          consumersVideo: new Map<string, Consumer>(),
-          consumersAudio: new Map<string, Consumer>(),
-        },
-      });
-      client.join(this.session_id);
-      this.broadcastAll('mediaClientConnected', {
-        id: query.user_id,
-        kind: query.kind,
-      });
+      this.logger.info(
+        `Creating room client for ${query.user_id}`,
+        'ADDCLIENT',
+      );
+      const roomClient = new RoomClient();
+      roomClient.io = client;
+      roomClient.id = query.user_id;
+      roomClient.device = query.device;
+      roomClient.kind = query.kind;
+      this._clients.set(query.user_id, roomClient);
+      this.logger.warn(this._clients, 'ADD CLIENT - CLIENTS');
 
       return true;
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssRoom - addClient');
     }
+  }
+
+  public async joinRoom(
+    query: IClientQuery,
+    client: Socket,
+    rtpCapabilities: RtpCapabilities,
+  ): Promise<any> {
+    const roomClient = this.clients.get(query.user_id);
+    if (roomClient.joined) {
+      throw new Error('Peer already joined');
+    }
+
+    roomClient.rtpCapabilities = rtpCapabilities;
+    roomClient.joined = true;
+    client.join(this.session_id);
+    for (const peer of this.getProducersPeers(query.user_id)) {
+      if (peer.producerAudio) {
+        this.createConsumer(roomClient, peer, peer.producerAudio);
+      }
+      if (peer.producerVideo) {
+        this.createConsumer(roomClient, peer, peer.producerVideo);
+      }
+    }
+    const peersInfo = this.getJoinedPeers(query.user_id).map((peer) => {
+      return {
+        id: peer.id,
+        kind: peer.kind,
+      };
+    });
+
+    this.broadcastAll('mediaClientConnected', {
+      id: query.user_id,
+      kind: query.kind,
+    });
+
+    return {
+      id: query.user_id,
+      peersInfo: peersInfo,
+    };
   }
 
   /**
@@ -371,25 +402,19 @@ export class WssRoom {
   public async removeClient(user_id: string): Promise<boolean> {
     try {
       this.logger.log(`${user_id} disconnected from room ${this.session_id}`);
-
       const user = this.clients.get(user_id);
-
       if (user) {
         const { io: client, media, id } = user;
-
         if (client) {
           this.broadcast(client, 'mediaClientDisconnect', { id });
 
           client.leave(this.session_id);
         }
-
         if (media) {
           this.closeMediaClient(media);
         }
-
         this.clients.delete(user_id);
       }
-
       return true;
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssRoom - removeClient');
@@ -530,7 +555,7 @@ export class WssRoom {
       const { forceTcp, producing, consuming } = data;
 
       const webRtcTransportOptions = {
-        ...this.mediasoupSettings.webRtcTransport,
+        ...this.webRtcTransport,
         appData: { producing, consuming, user_id },
         enableSctp: true,
         enableTcp: true,
@@ -547,7 +572,7 @@ export class WssRoom {
       this.logger.log(
         `room ${this.session_id} createWebRtcTransport - ${data.type}`,
       );
-
+      console.warn(this.clients, 'clients');
       const user = this.clients.get(user_id);
 
       const transport = await this.router.createWebRtcTransport(
@@ -568,15 +593,7 @@ export class WssRoom {
       if (consuming) {
         user.media.consumerTransport = transport;
       }
-      //
-      // switch (data.type) {
-      //   case 'producer':
-      //
-      //     break;
-      //   case 'consumer':
-      //
-      //     break;
-      // }
+
       await this.updateMaxIncomingBitrate();
       return {
         id: transport.id,
@@ -645,7 +662,85 @@ export class WssRoom {
    * @param {string} user_id sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
+  private async produce(
+    data: {
+      rtpParameters: RTCRtpParameters;
+      kind: MediaKind;
+      appData: any;
+      rtpCapabilities: RtpCapabilities;
+    },
+    user_id: string,
+  ): Promise<Record<string, unknown>> {
+    const { rtpCapabilities, rtpParameters, kind, appData } = data;
+    try {
+      this.logger.log(`room ${this.session_id} produce - ${data.kind}`);
 
+      const user = this.clients.get(user_id);
+
+      const transport = user.producerTransport;
+
+      if (!transport) {
+        throw new Error(
+          `Couldn't find producer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+        );
+      }
+
+      const producer = await transport.produce({
+        rtpParameters,
+        kind,
+        appData: {
+          user_id,
+          kind: data.kind,
+        },
+      });
+
+      switch (data.kind) {
+        case 'video':
+          user.producerVideo = producer;
+          break;
+        case 'audio':
+          user.producerAudio = producer;
+          await this.audioLevelObserver.addProducer({
+            producerId: producer.id,
+          });
+          break;
+      }
+      this.broadcast(user.io, 'mediaProduce', { user_id, kind: data.kind });
+      if (data.kind === 'video') {
+        producer.on(
+          'videoorientationchange',
+          (videoOrientation: ProducerVideoOrientation) => {
+            this.broadcastAll('mediaVideoOrientationChange', {
+              user_id,
+              videoOrientation,
+            });
+          },
+        );
+      }
+      producer.on('score', (score: ProducerScore[]) => {
+        this.notification(user.io, 'producerScore', {
+          producerId: producer.id,
+          kind: data.kind,
+          score,
+        });
+        this.logger.log(
+          `room ${this.session_id} user ${user_id} producer ${
+            data.kind
+          } score ${JSON.stringify(score)}`,
+        );
+      });
+      // for (const peer of this.getJoinedPeers(user.id)) {
+      //   this.createConsumer(peer, user, producer);
+      // }
+      return {};
+    } catch (error) {
+      this.logger.error(
+        error.message,
+        error.stack,
+        'MediasoupHelper - produce',
+      );
+    }
+  }
   /**
    * Streams video or audio from one user to another.
    * @param {Record<string, unknown>} data { rtpCapabilities: RTCRtpCapabilities; user_id: string; kind: MediaKind }
@@ -849,7 +944,6 @@ export class WssRoom {
       );
     }
   }
-
   /**
    * Request a keyframe.
    * @param {Record<string, unknown>} data { user_id: string }
@@ -882,7 +976,6 @@ export class WssRoom {
       );
     }
   }
-
   /**
    * Gives the transport status.
    * @param {Record<string, unknown>} data { type: TPeer }
@@ -1315,7 +1408,7 @@ export class WssRoom {
         minimumAvailableOutgoingBitrate,
         maximumAvailableOutgoingBitrate,
         factorIncomingBitrate,
-      } = this.mediasoupSettings.webRtcTransport;
+      } = this.webRtcTransport;
 
       let newMaxIncomingBitrate = Math.round(
         maximumAvailableOutgoingBitrate /
@@ -1361,20 +1454,13 @@ export class WssRoom {
     }
   }
 
-  getJoinedPeers(excludePeerId = undefined): IClient[] {
-    return Array.from(this.clients.values()).filter(
-      (peer) => peer.id != excludePeerId,
-    );
-  }
-
-  async createConsumer(
-    consumerPeer: IClient,
-    producerPeer: IClient,
+  private async createConsumer(
+    consumerPeer: RoomClient,
+    producerPeer: RoomClient,
     producer: Producer,
-    rtpCapabilities: RtpCapabilities,
   ) {
     if (
-      !rtpCapabilities ||
+      !consumerPeer.rtpCapabilities ||
       !this.router.canConsume({
         producerId: producer.id,
         rtpCapabilities: this.router.rtpCapabilities,
@@ -1390,7 +1476,7 @@ export class WssRoom {
     try {
       consumer = await transport.consume({
         producerId: producer.id,
-        rtpCapabilities: rtpCapabilities,
+        rtpCapabilities: consumerPeer.rtpCapabilities,
         paused: producer.kind === 'video',
       });
       if (producer.kind === 'audio') {
@@ -1448,19 +1534,7 @@ export class WssRoom {
     });
 
     try {
-      await this._request(consumerPeer.io, 'newConsumer', {
-        peerId: producerPeer.id,
-        id: consumer.id,
-        kind: consumer.kind,
-        rtpParameters: consumer.rtpParameters,
-        type: consumer.type,
-        appData: producer.appData,
-        producerPaused: consumer.producerPaused,
-        producerId: producer.id,
-      });
-
       await consumer.resume();
-
       consumerPeer.io.emit('consumerScore', {
         user_id: producerPeer.id,
         kind: producer.kind,
@@ -1471,6 +1545,60 @@ export class WssRoom {
     }
   }
 
+  private getJoinedPeers(excludePeerId = undefined): RoomClient[] {
+    return Array.from(this.clients.values()).filter(
+      (peer) => peer.id != excludePeerId,
+    );
+  }
+
+  private getProducersPeers(excludedPeerId = undefined) {
+    return Array.from(this.clients.values()).filter(
+      (peer) =>
+        (peer.producerAudio != undefined || peer.producerVideo != undefined) &&
+        peer.id != excludedPeerId,
+    );
+  }
+
+  /**
+   * Sends messages from the client to everyone in the room.
+   * @param {io.Socket} client source client
+   * @param {string} event message event
+   * @param {msg} msg client message
+   * @returns {boolean} boolean
+   */
+  public broadcast(
+    client: Socket,
+    event: string,
+    msg: Record<string, unknown>,
+  ): boolean {
+    try {
+      return client.broadcast.to(this.session_id).emit(event, msg);
+    } catch (error) {
+      this.logger.error(error.message, error.stack, 'WssRoom - broadcast');
+    }
+  }
+  /**
+   * Sends messages from the client to everyone in the room, including him.
+   * @param {string} event event from the message
+   * @param {msg} msg client message
+   * @returns {boolean} boolean
+   */
+  public broadcastAll(event: string, msg: Record<string, unknown>): boolean {
+    try {
+      console.log(event);
+      console.log(msg);
+      return this.wssServer.to(this.session_id).emit(event, msg);
+    } catch (error) {
+      this.logger.error(error.message, error.stack, 'WssRoom - broadcastAll');
+    }
+  }
+  public notification(
+    client: Socket,
+    event: string,
+    payload: Record<string, unknown>,
+  ): void {
+    client.emit(event, payload);
+  }
   _timeoutCallback(callback) {
     let called = false;
 
@@ -1524,72 +1652,6 @@ export class WssRoom {
           );
         else throw error;
       }
-    }
-  }
-
-  private async produce(
-    data: { rtpParameters: RTCRtpParameters; kind: MediaKind },
-    user_id: string,
-  ): Promise<Record<string, unknown>> {
-    try {
-      this.logger.log(`room ${this.session_id} produce - ${data.kind}`);
-
-      const user = this.clients.get(user_id);
-
-      const transport = user.media.producerTransport;
-
-      if (!transport) {
-        throw new Error(
-          `Couldn't find producer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
-        );
-      }
-
-      const producer = await transport.produce({
-        ...data,
-        appData: { user_id, kind: data.kind },
-      });
-
-      switch (data.kind) {
-        case 'video':
-          user.media.producerVideo = producer;
-          break;
-        case 'audio':
-          user.media.producerAudio = producer;
-          await this.audioLevelObserver.addProducer({
-            producerId: producer.id,
-          });
-          break;
-      }
-
-      this.broadcast(user.io, 'mediaProduce', { user_id, kind: data.kind });
-
-      if (data.kind === 'video') {
-        producer.on(
-          'videoorientationchange',
-          (videoOrientation: ProducerVideoOrientation) => {
-            this.broadcastAll('mediaVideoOrientationChange', {
-              user_id,
-              videoOrientation,
-            });
-          },
-        );
-      }
-
-      producer.on('score', (score: ProducerScore[]) => {
-        this.logger.log(
-          `room ${this.session_id} user ${user_id} producer ${
-            data.kind
-          } score ${JSON.stringify(score)}`,
-        );
-      });
-
-      return {};
-    } catch (error) {
-      this.logger.error(
-        error.message,
-        error.stack,
-        'MediasoupHelper - produce',
-      );
     }
   }
 }
