@@ -10,8 +10,8 @@ import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.i
 
 async function bootstrap() {
   let httpsOptions: HttpsOptions = {
-    key: fs.readFileSync(process.env.DTLSPRIVATEKEYFILE),
-    cert: fs.readFileSync(process.env.DTLSCERTIFICATEFILE),
+    // key: fs.readFileSync(process.env.DTLSPRIVATEKEYFILE),
+    // cert: fs.readFileSync(process.env.DTLSCERTIFICATEFILE),
   };
   if (process.env.ENVIRONMENT !== 'DEVELOPMENT') {
     httpsOptions = {

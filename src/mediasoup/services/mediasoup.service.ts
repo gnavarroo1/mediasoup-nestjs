@@ -5,11 +5,15 @@ import {
 } from '../../../types/global';
 import { Worker, WorkerSettings } from 'mediasoup/lib/types';
 import { LoggerService } from '../../logger/logger.service';
-import { IWorkerInfo } from '../../wss/wss.interfaces';
+import { IWorkerInfo } from '../types/mediasoup.types';
 import { AppConfigService } from '../../config/config.service';
 import { MediasoupRoom } from '../types/room.mediasoup';
 import * as mediasoup from 'mediasoup';
-import { AddClientDto, IClientQuery, TKind } from '../types/mediasoup.types';
+import {
+  AddClientDto,
+  IClientQuery,
+  TTransportKind,
+} from '../types/mediasoup.types';
 import { Server, Socket } from 'socket.io';
 
 @Injectable()
@@ -20,11 +24,9 @@ export class MediasoupService {
   get rooms(): Map<string, MediasoupRoom> {
     return this._rooms;
   }
-
   set rooms(value: Map<string, MediasoupRoom>) {
     this._rooms = value;
   }
-
   get workers(): {
     [p: number]: {
       clientsCount: number;
@@ -35,7 +37,6 @@ export class MediasoupService {
   } {
     return this._workers;
   }
-
   set workers(value: {
     [p: number]: {
       clientsCount: number;
@@ -61,7 +62,6 @@ export class MediasoupService {
       }),
     ) as { [pid: string]: IWorkerInfo };
   }
-
   private _rooms: Map<string, MediasoupRoom> = new Map<string, MediasoupRoom>();
   private _workers: {
     [index: number]: {
@@ -82,6 +82,7 @@ export class MediasoupService {
     this.workerSettings = appConfig.mediasoupSettings.worker;
     this.mediasoupSettings = appConfig.mediasoupSettings;
     this.workerPool = appConfig.mediasoupSettings.workerPool;
+    this.createWorkers();
   }
 
   /**
@@ -182,7 +183,7 @@ export class MediasoupService {
       const index = this.getOptimalWorkerIndex();
       room.worker = this._workers[index].worker;
       room.workerIndex = index;
-      room.session_id = sessionId;
+      room.sessionId = sessionId;
       await room.load();
       this._rooms.set(sessionId, room);
       this.logger.info(`room ${sessionId} created`);
@@ -209,34 +210,42 @@ export class MediasoupService {
       data: any;
     },
   ): Promise<any> {
-    const room = this._rooms.get(payload.query.session_id);
+    const room = this._rooms.get(payload.query.sessionId);
     this.logger.warn(room.clientsCount, 'ADDCLIENT');
     if (!room) {
-      await this.initSession(payload.query.session_id);
+      await this.initSession(payload.query.sessionId);
     }
     return room.addClient(payload.query, client, payload.data);
   }
 
   public async joinRoom(addClientDto: AddClientDto): Promise<any> {
-    const { client, kind, user_id, device, session_id } = addClientDto;
+    const { client, kind, userId, device, sessionId } = addClientDto;
 
-    const room = this._rooms.get(session_id);
-    return await room.joinRoom(
+    const room = this._rooms.get(sessionId);
+
+    return room.joinRoom(
       {
-        session_id: session_id,
-        user_id: user_id,
+        sessionId: sessionId,
+        userId: userId,
         device: device,
         kind: kind,
       },
       client,
       addClientDto.rtpCapabilities,
+      addClientDto.producerCapabilities,
     );
   }
 
   public async handleMedia(client: Socket, data: any): Promise<any> {
-    const room = this._rooms.get(data.session_id);
+    const room = this._rooms.get(data.sessionId);
     if (room) {
-      return room.speakMsClient(data.user_id, data.data);
+      return room.speakMsClient(data.userId, data.data);
+    }
+  }
+  public async handleToggleConsumer(client: Socket, data: any): Promise<any> {
+    const room = this._rooms.get(data.sessionId);
+    if (room) {
+      return;
     }
   }
 }

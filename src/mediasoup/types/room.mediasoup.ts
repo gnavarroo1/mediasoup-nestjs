@@ -20,8 +20,9 @@ import {
   IMediasoupClient,
   IMsMessage,
   RoomClient,
-  SocketTimeoutError,
-  TPeer,
+  TMediaKind,
+  TMediaProduceCapabilities,
+  TTransportKind,
 } from './mediasoup.types';
 
 import { LoggerService } from '../../logger/logger.service';
@@ -33,57 +34,61 @@ import {
 import { AppConfigService } from '../../config/config.service';
 
 export class MediasoupRoom {
+  private _clients: Map<string, RoomClient> = new Map<string, RoomClient>();
+  private _router: Router;
+  private _audioLevelObserver: AudioLevelObserver;
+  private _worker: Worker;
+  private _workerIndex: number;
+  private _sessionId: string;
+  private mediaCodecs: IMediasoupMediacodecSettings[];
+  private webRtcTransport: IMediasoupWebRtcTransport;
+  constructor(
+    private readonly logger: LoggerService,
+    private readonly appConfig: AppConfigService,
+    private readonly wssServer: Server,
+  ) {
+    this.mediaCodecs = appConfig.mediasoupSettings.router.mediaCodecs;
+    this.webRtcTransport = appConfig.mediasoupSettings.webRtcTransport;
+  }
   get clients(): Map<string, RoomClient> {
     return this._clients;
   }
   get router(): Router {
     return this._router;
   }
-
   set router(value: Router) {
     this._router = value;
   }
-
   get audioLevelObserver(): AudioLevelObserver {
     return this._audioLevelObserver;
   }
-
   set audioLevelObserver(value: AudioLevelObserver) {
     this._audioLevelObserver = value;
   }
-
   get worker(): Worker {
     return this._worker;
   }
-
   set worker(value: Worker) {
     this._worker = value;
   }
-
   get workerIndex(): number {
     return this._workerIndex;
   }
-
   set workerIndex(value: number) {
     this._workerIndex = value;
   }
-
-  get session_id(): string {
-    return this._session_id;
+  get sessionId(): string {
+    return this._sessionId;
   }
-
-  set session_id(value: string) {
-    this._session_id = value;
+  set sessionId(value: string) {
+    this._sessionId = value;
   }
-
   get clientsCount(): number {
     return this._clients.size;
   }
-
   get clientsIds(): string[] {
     return Array.from(this._clients.keys());
   }
-
   get audioProducerIds(): string[] {
     return Array.from(this._clients.values())
       .filter((c) => {
@@ -95,7 +100,6 @@ export class MediasoupRoom {
       })
       .map((c) => c.id);
   }
-
   get videoProducerIds(): string[] {
     return Array.from(this._clients.values())
       .filter((c) => {
@@ -107,7 +111,6 @@ export class MediasoupRoom {
       })
       .map((c) => c.id);
   }
-
   get producerIds(): string[] {
     return Array.from(this._clients.values())
       .filter((c) => {
@@ -123,22 +126,20 @@ export class MediasoupRoom {
       })
       .map((c) => c.id);
   }
-
   get getRouterRtpCapabilities(): RtpCapabilities {
     return this._router.rtpCapabilities;
   }
-
   get stats() {
     const clientsArray = Array.from(this._clients.values());
 
     return {
-      id: this.session_id,
+      id: this.sessionId,
       worker: this.workerIndex,
       clients: clientsArray.map((c) => ({
         id: c.id,
         device: c.device,
-        produceAudio: c.media.producerAudio ? true : false,
-        produceVideo: c.media.producerVideo ? true : false,
+        produceAudio: !!c.media.producerAudio,
+        produceVideo: !!c.media.producerVideo,
       })),
       groupByDevice: clientsArray.reduce((acc, curr) => {
         if (!acc[curr.device]) {
@@ -151,25 +152,6 @@ export class MediasoupRoom {
       }, {}) as { [device: string]: number },
     };
   }
-
-  private _clients: Map<string, RoomClient> = new Map<string, RoomClient>();
-  private _router: Router;
-  private _audioLevelObserver: AudioLevelObserver;
-  private mediaCodecs: IMediasoupMediacodecSettings[];
-  private webRtcTransport: IMediasoupWebRtcTransport;
-  private _worker: Worker;
-  private _workerIndex: number;
-  private _session_id: string;
-
-  constructor(
-    private readonly logger: LoggerService,
-    private readonly appConfig: AppConfigService,
-    private readonly wssServer: Server,
-  ) {
-    this.mediaCodecs = appConfig.mediasoupSettings.router.mediaCodecs;
-    this.webRtcTransport = appConfig.mediasoupSettings.webRtcTransport;
-  }
-
   private async configureWorker() {
     try {
       await this.worker
@@ -190,17 +172,17 @@ export class MediasoupRoom {
           this.audioLevelObserver.on(
             'volumes',
             (volumes: Array<{ producer: Producer; volume: number }>) => {
-              this.wssServer.to(this.session_id).emit('mediaActiveSpeaker', {
-                user_id: (volumes[0].producer.appData as { user_id: string })
-                  .user_id,
+              this.wssServer.to(this.sessionId).emit('mediaActiveSpeaker', {
+                userId: (volumes[0].producer.appData as { userId: string })
+                  .userId,
                 volume: volumes[0].volume,
               });
             },
           );
 
           this.audioLevelObserver.on('silence', () => {
-            this.wssServer.to(this.session_id).emit('mediaActiveSpeaker', {
-              user_id: null,
+            this.wssServer.to(this.sessionId).emit('mediaActiveSpeaker', {
+              userId: null,
             });
           });
         });
@@ -235,9 +217,9 @@ export class MediasoupRoom {
 
         if (client) {
           client.broadcast
-            .to(this.session_id)
+            .to(this.sessionId)
             .emit('mediaDisconnectMember', { id });
-          client.leave(this.session_id);
+          client.leave(this.sessionId);
         }
 
         if (media) {
@@ -248,7 +230,7 @@ export class MediasoupRoom {
       this.audioLevelObserver.close();
       this.router.close();
 
-      this.logger.log(`room ${this.session_id} closed`);
+      this.logger.log(`room ${this.sessionId} closed`);
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssRoom - close');
     }
@@ -331,21 +313,16 @@ export class MediasoupRoom {
    */
   public addClient(query: IClientQuery, client: Socket, data: any): any {
     try {
-      if (this.clients.get(query.user_id)) {
+      if (this.clients.get(query.userId)) {
         throw new Error('Peer already joined');
       }
-      this.logger.log(`${query.user_id} connected to room ${this.session_id}`);
-      this.logger.info(
-        `Creating room client for ${query.user_id}`,
-        'ADDCLIENT',
-      );
+      this.logger.log(`${query.userId} connected to room ${this.sessionId}`);
       const roomClient = new RoomClient();
       roomClient.io = client;
-      roomClient.id = query.user_id;
+      roomClient.id = query.userId;
       roomClient.device = query.device;
       roomClient.kind = query.kind;
-      this._clients.set(query.user_id, roomClient);
-      this.logger.warn(this._clients, 'ADD CLIENT - CLIENTS');
+      this._clients.set(query.userId, roomClient);
 
       return true;
     } catch (error) {
@@ -357,16 +334,22 @@ export class MediasoupRoom {
     query: IClientQuery,
     client: Socket,
     rtpCapabilities: RtpCapabilities,
+    producerCapabilities: TMediaProduceCapabilities,
   ): Promise<any> {
-    const roomClient = this.clients.get(query.user_id);
+    const roomClient = this.clients.get(query.userId);
     if (roomClient.joined) {
       throw new Error('Peer already joined');
     }
-
+    roomClient.globalProduceVideoEnabled =
+      producerCapabilities.globalVideoEnabled;
+    roomClient.globalProduceAudioEnabled =
+      producerCapabilities.globalAudioEnabled;
+    roomClient.producerAudioEnabled = producerCapabilities.producerAudioEnabled;
+    roomClient.producerVideoEnabled = producerCapabilities.producerVideoEnabled;
     roomClient.rtpCapabilities = rtpCapabilities;
     roomClient.joined = true;
-    client.join(this.session_id);
-    for (const peer of this.getProducersPeers(query.user_id)) {
+    client.join(this.sessionId);
+    for (const peer of this.getProducersPeers(query.userId)) {
       if (peer.producerAudio) {
         // this.createConsumer(roomClient, peer, peer.producerAudio);
       }
@@ -374,44 +357,54 @@ export class MediasoupRoom {
         // this.createConsumer(roomClient, peer, peer.producerVideo);
       }
     }
-    const peersInfo = this.getJoinedPeers(query.user_id).map((peer) => {
+    const peersInfo = this.getJoinedPeers(query.userId).map((peer) => {
       return {
         id: peer.id,
         kind: peer.kind,
+        producerAudioEnabled: peer.producerAudioEnabled,
+        producerVideoEnabled: peer.producerVideoEnabled,
+        globalAudioEnabled: peer.globalProduceAudioEnabled,
+        globalVideoEnabled: peer.globalProduceVideoEnabled,
+        isScreenSharing: peer.isScreenSharing,
       };
     });
 
     this.broadcastAll('mediaClientConnected', {
-      id: query.user_id,
+      id: query.userId,
       kind: query.kind,
+      producerAudioEnabled: roomClient.producerAudioEnabled,
+      producerVideoEnabled: roomClient.producerVideoEnabled,
+      globalAudioEnabled: roomClient.globalProduceAudioEnabled,
+      globalVideoEnabled: roomClient.globalProduceVideoEnabled,
+      isScreenSharing: roomClient.isScreenSharing,
     });
 
     return {
-      id: query.user_id,
+      id: query.userId,
       peersInfo: peersInfo,
     };
   }
 
   /**
    * Removes the user from the room.
-   * @param {string} user_id user
+   * @param {string} userId user
    * @returns {Promise<boolean>} Promise<boolean>
    */
-  public async removeClient(user_id: string): Promise<boolean> {
+  public async removeClient(userId: string): Promise<boolean> {
     try {
-      this.logger.log(`${user_id} disconnected from room ${this.session_id}`);
-      const user = this.clients.get(user_id);
+      this.logger.log(`${userId} disconnected from room ${this.sessionId}`);
+      const user = this.clients.get(userId);
       if (user) {
         const { io: client, media, id } = user;
         if (client) {
           this.broadcast(client, 'mediaClientDisconnect', { id });
 
-          client.leave(this.session_id);
+          client.leave(this.sessionId);
         }
         if (media) {
           this.closeMediaClient(media);
         }
-        this.clients.delete(user_id);
+        this.clients.delete(userId);
       }
       return true;
     } catch (error) {
@@ -421,12 +414,12 @@ export class MediasoupRoom {
 
   /**
    * Processes the message.
-   * @param {string} user_id sender of the message
+   * @param {string} userId sender of the message
    * @param {IMsMessage} msg message
    * @returns {Promise<Record<string, unknown> | boolean>} Promise<Record<string, unknown> | boolean>
    */
   public async speakMsClient(
-    user_id: string,
+    userId: string,
     msg: IMsMessage,
   ): Promise<Record<string, unknown> | string[] | boolean | IProducerRequest> {
     try {
@@ -436,67 +429,75 @@ export class MediasoupRoom {
             routerRtpCapabilities: this.getRouterRtpCapabilities,
           };
         case 'createWebRtcTransport':
-          const { type } = msg.data as TPeer;
+          const { type } = msg.data as {
+            type: TTransportKind;
+          };
 
-          return await this.createWebRtcTransport({ type }, user_id);
+          return await this.createWebRtcTransport({ type }, userId);
         case 'connectWebRtcTransport':
           return await this.connectWebRtcTransport(
             msg.data as {
               dtlsParameters: DtlsParameters;
-              type: string;
+              type: TTransportKind;
             },
-            user_id,
+            userId,
           );
         case 'produce':
           return await this.produce(
             msg.data as {
               rtpParameters: RTCRtpParameters;
               kind: MediaKind;
+              appData: any;
             },
-            user_id,
+            userId,
           );
         case 'consume':
           return await this.consume(
             msg.data as {
               rtpCapabilities: RtpCapabilities;
-              user_id: string;
+              userId: string;
               kind: MediaKind;
+              appData: any;
             },
-            user_id,
+            userId,
           );
         case 'restartIce':
           return await this.restartIce(
             msg.data as { type: 'producer' | 'consumer' },
-            user_id,
+            userId,
           );
         case 'requestConsumerKeyFrame':
           return await this.requestConsumerKeyFrame(
-            msg.data as { user_id: string },
-            user_id,
+            msg.data as { userId: string },
+            userId,
           );
         case 'getTransportStats':
           return await this.getTransportStats(
             msg.data as { type: 'producer' | 'consumer' },
-            user_id,
+            userId,
           );
         case 'getProducerStats':
           return await this.getProducerStats(
-            msg.data as { user_id: string; kind: MediaKind },
-            user_id,
+            msg.data as { userId: string; kind: MediaKind },
+            userId,
           );
         case 'getConsumerStats':
           return await this.getConsumerStats(
-            msg.data as { user_id: string; kind: MediaKind },
-            user_id,
+            msg.data as { userId: string; kind: MediaKind },
+            userId,
           );
         case 'getAudioProducerIds':
-          return await this.getAudioProducerIds(user_id);
+          return await this.getAudioProducerIds(userId);
         case 'getVideoProducerIds':
-          return await this.getVideoProducerIds(user_id);
+          return await this.getVideoProducerIds(userId);
         case 'producerClose':
           return await this.producerClose(
-            msg.data as { user_id: string; kind: MediaKind },
-            user_id,
+            msg.data as {
+              userId: string;
+              kind: TMediaKind;
+              isScreenMedia: boolean;
+            },
+            userId,
           );
         case 'producerPause':
           return await this.producerPause(
@@ -505,23 +506,27 @@ export class MediasoupRoom {
         case 'producerResume':
           this.logger.warn(msg.data);
           return await this.producerResume(
-            msg.data as { user_id: string; kind: MediaKind },
-            user_id,
+            msg.data as {
+              userId: string;
+              kind: MediaKind;
+              isGlobal?: boolean;
+            },
+            userId,
           );
         case 'allProducerClose':
           return await this.allProducerClose(
             msg.data as { kind: MediaKind },
-            user_id,
+            userId,
           );
         case 'allProducerPause':
           return await this.allProducerPause(
             msg.data as { kind: MediaKind },
-            user_id,
+            userId,
           );
         case 'allProducerResume':
           return await this.allProducerResume(
             msg.data as { kind: MediaKind },
-            user_id,
+            userId,
           );
       }
 
@@ -536,86 +541,90 @@ export class MediasoupRoom {
 
   /**
    * Creates a WebRTC transport for receiving or transmitting a stream.
-   * @param {Record<string, unknown>} data { type: TPeer }
-   * @param {string} user_id sender of the message
+   * @param {Record<string, unknown>} data { type: TTransportKind }
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async createWebRtcTransport(
-    data: TPeer,
-    user_id: string,
+  public async createWebRtcTransport(
+    data: {
+      type: TTransportKind;
+    },
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
       const webRtcTransportOptions = {
         listenIps: this.webRtcTransport.listenIps,
         initialAvailableOutgoingBitrate:
           this.webRtcTransport.initialAvailableOutgoingBitrate,
-        appData: { user_id, type: data.type },
+        appData: { userId, type: data.type },
         enableUdp: true,
         enableSctp: true,
         enableTcp: true,
         preferUdp: true,
       };
-
       this.logger.log(
-        `room ${this.session_id} createWebRtcTransport - ${data.type}`,
+        `room ${this.sessionId} createWebRtcTransport - ${data.type}`,
       );
-      const user = this.clients.get(user_id);
-      const transport = await this.router.createWebRtcTransport(
-        webRtcTransportOptions,
-      );
-
+      const client = this.clients.get(userId);
+      const transport: WebRtcTransport =
+        await this.router.createWebRtcTransport(webRtcTransportOptions);
       transport.on('dtlsstatechange', (dtlsState) => {
-        if (dtlsState === 'failed' || dtlsState === 'closed')
-          this.logger.warn(
-            dtlsState,
-            `WebRtcTransport "dtlsstatechange" event [dtlsState:%s] ${user_id}`,
-          );
+        switch (dtlsState) {
+          case 'closed':
+            this.logger.log({ name: userId }, 'Transport close');
+            transport.close();
+            break;
+          case 'failed':
+            this.logger.log({ name: userId }, 'Transport failed');
+            break;
+        }
       });
 
+      transport.on('close', () => {
+        this.logger.log({ name: userId }, 'Transport close');
+      });
       switch (data.type) {
         case 'producer':
-          user.producerTransport = transport;
+          client.producerTransport = transport;
           break;
         case 'consumer':
-          user.consumerTransport = transport;
+          client.consumerTransport = transport;
           break;
       }
-
-      await this.updateMaxIncomingBitrate();
       return {
         id: transport.id,
         iceParameters: transport.iceParameters,
         iceCandidates: transport.iceCandidates,
         dtlsParameters: transport.dtlsParameters,
       };
-    } catch (error) {
+    } catch (e) {
       this.logger.error(
-        error.message,
-        error.stack,
-        'MediasoupHelper - createWebRtcTransport',
+        e.message,
+        e.stack,
+        `MediasoupHelper - createWebRtcTransport - ${e.name}`,
       );
+      return {
+        error: e,
+      };
     }
   }
 
   /**
    * Connects WebRTC transport.
-   * @param {Record<string, unknown>} data { dtlsParameters: RTCDtlsParameters; type: TPeer }
-   * @param {string} user_id sender of the message
+   * @param {Record<string, unknown>} data { dtlsParameters: RTCDtlsParameters; type: TTransportKind }
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
-  private async connectWebRtcTransport(
-    data: { dtlsParameters: DtlsParameters; type: string },
-    user_id: string,
+  public async connectWebRtcTransport(
+    data: { dtlsParameters: DtlsParameters; type: TTransportKind },
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
       this.logger.log(
-        `room ${this.session_id} connectWebRtcTransport - ${data.type}`,
+        `room ${this.sessionId} connectWebRtcTransport - ${data.type}`,
       );
-
-      const user = this.clients.get(user_id);
-
+      const user = this.clients.get(userId);
       let transport: WebRtcTransport;
-
       switch (data.type) {
         case 'producer':
           transport = user.producerTransport;
@@ -624,76 +633,85 @@ export class MediasoupRoom {
           transport = user.consumerTransport;
           break;
       }
-
       if (!transport) {
         throw new Error(
-          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find ${data.type} transport with 'userId'=${userId} and 'sessionId'=${this.sessionId}`,
         );
       }
-
       await transport.connect({ dtlsParameters: data.dtlsParameters });
-
-      return {};
+      return {
+        connected: true,
+      };
     } catch (error) {
       this.logger.error(
         error.message,
         error.stack,
         'MediasoupHelper - connectWebRtcTransport',
       );
+      return {
+        error: error,
+      };
     }
   }
 
   /**
    * Receives a stream of video or audio from the user.
    * @param {Record<string, unknown>} data { rtpParameters: RTCRtpParameters; kind: MediaKind }
-   * @param {string} user_id sender of the message
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async produce(
     data: {
       rtpParameters: RTCRtpParameters;
       kind: MediaKind;
+      appData: any;
     },
-    user_id: string,
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.log(
-        `room ${this.session_id} produce - ${data.kind}`,
-        'PRODUCE PLS',
-      );
-
-      const user = this.clients.get(user_id);
-
+      const user = this.clients.get(userId);
       const transport = user.producerTransport;
-
+      console.warn(data.appData);
       if (!transport) {
         throw new Error(
-          `Couldn't find producer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find producer transport with 'userId'=${userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
       const producer = await transport.produce({
         ...data,
-        appData: { user_id, kind: data.kind },
+        appData: { ...data.appData, userId, kind: data.kind },
       });
-
-      switch (data.kind) {
+      this.logger.log(
+        `session ${this.sessionId} produce - ${data.appData.mediaTag}`,
+        'PRODUCE',
+      );
+      switch (data.appData.mediaTag) {
+        case 'screen-media':
+          user.producerScreen = producer;
+          this.logger.log(!!user.producerScreen, 'producerVideo instance');
+          this.logger.error(
+            user.producerScreen == this.clients.get(userId).producerScreen,
+            'producerScreen instance',
+            'PRODUCE',
+          );
+          break;
         case 'video':
           user.producerVideo = producer;
           this.logger.log(!!user.producerVideo, 'producerVideo instance');
           this.logger.error(
-            user.producerVideo == this.clients.get(user_id).producerVideo,
+            user.producerVideo == this.clients.get(userId).producerVideo,
             'producerVideo instance',
-            'PRODUCE PLS',
+            'PRODUCE',
           );
           break;
         case 'audio':
           user.producerAudio = producer;
           this.logger.log(!!user.producerAudio, 'producerAudio instance');
           this.logger.error(
-            user.producerAudio == this.clients.get(user_id).producerAudio,
+            user.producerAudio == this.clients.get(userId).producerAudio,
             'producerAudio instance',
-            'PRODUCE PLS',
+            'PRODUCE',
           );
           await this.audioLevelObserver.addProducer({
             producerId: producer.id,
@@ -701,38 +719,42 @@ export class MediasoupRoom {
           break;
       }
 
-      this.broadcast(user.io, 'mediaProduce', { user_id, kind: data.kind });
-      if (data.kind === 'video') {
+      this.broadcast(user.io, 'mediaProduce', { userId, kind: data.kind });
+      if (data.appData.mediaTag === 'video') {
         producer.on(
           'videoorientationchange',
           (videoOrientation: ProducerVideoOrientation) => {
             this.broadcastAll('mediaVideoOrientationChange', {
-              user_id,
+              userId,
               videoOrientation,
             });
           },
         );
       }
       producer.on('score', (score: ProducerScore[]) => {
-        // this.notification(user.io, 'producerScore', {
-        //   producerId: producer.id,
-        //   kind: data.kind,
-        //   score,
-        // });
         this.logger.log(
-          `room ${this.session_id} user ${user_id} producer ${
+          `room ${this.sessionId} user ${userId} producer ${
             data.kind
           } score ${JSON.stringify(score)}`,
         );
       });
+
       for (const peer of this.getJoinedPeers(user.id)) {
         this.createConsumer(peer, user, producer);
       }
       if (producer.kind === 'audio') {
         this.audioLevelObserver
           .addProducer({ producerId: producer.id })
-          .catch(() => {});
+          .catch((err) => {
+            this.logger.error(err.message, err.stack);
+          });
       }
+      if (data.appData.mediaTag !== 'screen-media') {
+        await producer.pause();
+      } else {
+        user.isScreenSharing = true;
+      }
+
       return {};
     } catch (error) {
       this.logger.error(
@@ -744,73 +766,80 @@ export class MediasoupRoom {
   }
   /**
    * Streams video or audio from one user to another.
-   * @param {Record<string, unknown>} data { rtpCapabilities: RTCRtpCapabilities; user_id: string; kind: MediaKind }
-   * @param {string} user_id sender of the message
+   * @param {Record<string, unknown>} data { rtpCapabilities: RTCRtpCapabilities; userId: string; kind: MediaKind }
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async consume(
     data: {
       rtpCapabilities: RtpCapabilities;
-      user_id: string;
+      userId: string;
       kind: MediaKind;
+      appData: any;
     },
-    user_id: string,
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.log(`room ${this.session_id} produce - ${data.kind}`);
-      const user = this.clients.get(user_id);
-      const target = this.clients.get(data.user_id);
-      let target_producer: Producer;
-      this.logger.warn(
-        !!target.producerAudio,
-        `target audio producer ${data.user_id}`,
-      );
-      this.logger.warn(!!user.producerAudio, `src audio producer ${user_id}`);
-      this.logger.warn(
-        !!target.producerVideo,
-        `target video producer ${data.user_id}`,
-      );
-      this.logger.warn(!!user.producerAudio, `src video producer ${user_id}`);
-      switch (data.kind) {
+      this.logger.log(`room ${this.sessionId} consume - ${data.kind}`);
+      const user = this.clients.get(userId);
+      const target = this.clients.get(data.userId);
+      let targetProducer: Producer;
+      console.log('MEDIA TAG', data.appData.mediaTag);
+      switch (data.appData.mediaTag) {
+        case 'screen-media':
+          this.logger.warn(
+            !!target.producerScreen,
+            `target screen-media producer ${data.userId}`,
+          );
+          targetProducer = target.producerScreen;
+          break;
         case 'video':
-          target_producer = target.producerVideo;
+          this.logger.warn(
+            !!target.producerVideo,
+            `target video producer ${data.userId}`,
+          );
+          targetProducer = target.producerVideo;
           break;
         case 'audio':
-          target_producer = target.producerAudio;
+          this.logger.warn(
+            !!target.producerAudio,
+            `target audio producer ${data.userId}`,
+          );
+          targetProducer = target.producerAudio;
           break;
       }
-      if (!target_producer) {
+      if (!targetProducer) {
         throw new Error(
-          `Couldn't consume ${data.kind} with 'user_id'=${data.user_id} and 'room_id'=${this.session_id} | target ${data.kind} producer not found`,
+          `User ${userId} couldn't consume ${data.kind} with 'userId'=${data.userId} and 'sessionId'=${this.sessionId} | target ${data.appData.mediaTag} producer not found`,
         );
       }
       if (!data.rtpCapabilities) {
         throw new Error(
-          `Couldn't consume ${data.kind} with 'user_id'=${data.user_id} and 'room_id'=${this.session_id} | rtpcapabilities not found`,
+          `Couldn't consume ${data.kind} with 'userId'=${data.userId} and 'sessionId'=${this.sessionId} | rtpcapabilities not found`,
         );
       }
 
       if (
         !this.router.canConsume({
-          producerId: target_producer.id,
+          producerId: targetProducer.id,
           rtpCapabilities: data.rtpCapabilities,
         })
       ) {
         throw new Error(
-          `Couldn't consume ${data.kind} with 'user_id'=${data.user_id} and 'room_id'=${this.session_id} | router cant consume`,
+          `Couldn't consume ${data.kind} with 'userId'=${data.userId} and 'sessionId'=${this.sessionId} | router cant consume`,
         );
       }
 
       if (
-        !target_producer ||
+        !targetProducer ||
         !data.rtpCapabilities ||
         !this.router.canConsume({
-          producerId: target_producer.id,
+          producerId: targetProducer.id,
           rtpCapabilities: data.rtpCapabilities,
         })
       ) {
         throw new Error(
-          `Couldn't consume ${data.kind} with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't consume ${data.kind} with 'userId'=${data.userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
@@ -818,43 +847,63 @@ export class MediasoupRoom {
 
       if (!transport) {
         throw new Error(
-          `Couldn't find consumer transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find consumer transport with 'userId'=${userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
       const consumer = await transport.consume({
-        producerId: target_producer.id,
+        producerId: targetProducer.id,
         rtpCapabilities: data.rtpCapabilities,
-        paused: data.kind === 'video',
-        appData: { user_id, kind: data.kind, producer_user_id: data.user_id },
+        paused: targetProducer.paused,
+        appData: {
+          userId,
+          kind: data.kind,
+          producerUserId: data.userId,
+          mediaTag: data.appData.mediaTag,
+        },
       });
 
-      switch (data.kind) {
+      switch (data.appData.mediaTag) {
+        case 'screen-media':
+          if (!user.consumersScreen) {
+            user.media.consumersScreen = new Map<string, Consumer>();
+          }
+          user.consumersScreen.set(data.userId, consumer);
+          consumer.on('transportclose', async () => {
+            consumer.close();
+            user.consumersScreen.delete(data.userId);
+          });
+          consumer.on('producerclose', async () => {
+            user.io.emit('mediaProducerClose', {
+              userId: data.userId,
+              kind: data.kind,
+            });
+            consumer.close();
+            user.consumersScreen.delete(data.userId);
+          });
+          break;
         case 'video':
           if (!user.consumersVideo) {
             user.media.consumersVideo = new Map<string, Consumer>();
           }
-          console.log('CONSUMER TYPE ', consumer.type);
           if (consumer.type === 'simulcast') {
             await consumer.setPreferredLayers({
               spatialLayer: 2,
               temporalLayer: 2,
             });
           }
-          user.consumersVideo.set(data.user_id, consumer);
-
+          user.consumersVideo.set(data.userId, consumer);
           consumer.on('transportclose', async () => {
             consumer.close();
-            user.consumersVideo.delete(data.user_id);
+            user.consumersVideo.delete(data.userId);
           });
-
           consumer.on('producerclose', async () => {
             user.io.emit('mediaProducerClose', {
-              user_id: data.user_id,
+              userId: data.userId,
               kind: data.kind,
             });
             consumer.close();
-            user.consumersVideo.delete(data.user_id);
+            user.consumersVideo.delete(data.userId);
           });
           break;
         case 'audio':
@@ -862,70 +911,75 @@ export class MediasoupRoom {
             user.media.consumersAudio = new Map();
           }
 
-          user.consumersAudio.set(data.user_id, consumer);
+          user.consumersAudio.set(data.userId, consumer);
 
           consumer.on('transportclose', async () => {
             consumer.close();
-            user.consumersAudio.delete(data.user_id);
+            user.consumersAudio.delete(data.userId);
           });
 
           consumer.on('producerclose', async () => {
             user.io.emit('mediaProducerClose', {
-              user_id: data.user_id,
+              userId: data.userId,
               kind: data.kind,
+              mediaTag: data.appData.mediaTag,
             });
             consumer.close();
-            user.media.consumersAudio.delete(data.user_id);
+            user.media.consumersAudio.delete(data.userId);
           });
           break;
       }
 
-      consumer.on('producerpause', async () => {
-        await consumer.pause();
-        user.io.emit('mediaProducerPause', {
-          user_id: data.user_id,
-          kind: data.kind,
+      if (
+        data.appData.mediaTag === 'video' ||
+        data.appData.mediaTag === 'audio'
+      ) {
+        consumer.on('producerpause', async () => {
+          await consumer.pause();
+          user.io.emit('mediaProducerPause', {
+            userId: data.userId,
+            kind: data.kind,
+          });
         });
-      });
 
-      consumer.on('producerresume', async () => {
-        this.logger.warn(
-          `producer ${data.user_id} has resumed his stream. i am ${user_id} `,
-        );
-        await consumer.resume();
-        user.io.emit('mediaProducerResume', {
-          user_id: data.user_id,
-          kind: data.kind,
+        consumer.on('producerresume', async () => {
+          this.logger.warn(
+            `producer ${data.userId} has resumed his stream. i am ${userId} `,
+          );
+          await consumer.resume();
+          user.io.emit('mediaProducerResume', {
+            userId: data.userId,
+            kind: data.kind,
+          });
         });
-      });
 
-      consumer.on('score', (score: ConsumerScore[]) => {
-        // this.logger.log(
-        //   `room ${this.session_id} user ${user_id} consumer ${
-        //     data.kind
-        //   } score ${JSON.stringify(score)}`,
-        // );
-      });
-
-      consumer.on('layerschange', (layers: ConsumerLayers | null) => {
-        this.logger.log(
-          `room ${this.session_id} user ${user_id} consumer ${
-            data.kind
-          } layerschange ${JSON.stringify(layers)}`,
-        );
-      });
+        consumer.on('score', (score: ConsumerScore[]) => {
+          this.logger.log(
+            `room ${this.sessionId} user ${userId} consumer ${
+              data.kind
+            } score ${JSON.stringify(score)}`,
+          );
+        });
+      }
 
       if (consumer.kind === 'video') {
+        consumer.on('layerschange', (layers: ConsumerLayers | null) => {
+          this.logger.log(
+            `room ${this.sessionId} user ${userId} consumer ${
+              data.kind
+            } layerschange ${JSON.stringify(layers)}`,
+          );
+        });
         await consumer.resume();
       }
 
       return {
-        producerId: target_producer.id,
+        producerId: targetProducer.id,
         id: consumer.id,
         kind: consumer.kind,
         rtpParameters: consumer.rtpParameters,
         type: consumer.type,
-        producerPaused: consumer.producerPaused,
+        producerPaused: targetProducer.paused,
       };
     } catch (error) {
       this.logger.error(
@@ -938,19 +992,19 @@ export class MediasoupRoom {
 
   /**
    * Restarts ice connection.
-   * @param {Record<string, unknown>} data { type: TPeer }
-   * https://developer.mozilla.org/ru/docs/Web/API/WebRTC_API/%D0%BF%D1%80%D0%BE%D1%82%D0%BE%D0%BA%D0%BE%D0%BB%D1%8B
-   * @param {string} user_id sender of the message
+   * @param {Record<string, unknown>} data { type: TTransportKind }
+   * https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Protocols
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async restartIce(
-    data: { type: 'producer' | 'consumer' },
-    user_id: string,
+    data: { type: TTransportKind },
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.log(`room ${this.session_id} restartIce - ${data.type}`);
+      this.logger.log(`room ${this.sessionId} restartIce - ${data.type}`);
 
-      const user = this.clients.get(user_id);
+      const user = this.clients.get(userId);
 
       let transport: WebRtcTransport;
 
@@ -965,7 +1019,7 @@ export class MediasoupRoom {
 
       if (!transport) {
         throw new Error(
-          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find ${data.type} transport with 'userId'=${userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
@@ -982,22 +1036,22 @@ export class MediasoupRoom {
   }
   /**
    * Request a keyframe.
-   * @param {Record<string, unknown>} data { user_id: string }
-   * @param {string} user_id sender of the message
+   * @param {Record<string, unknown>} data { userId: string }
+   * @param {string} userId sender of the message
    * @returns {Promise<boolean>} Promise<boolean>
    */
   private async requestConsumerKeyFrame(
-    data: { user_id: string },
-    user_id: string,
+    data: { userId: string },
+    userId: string,
   ): Promise<boolean> {
     try {
-      const user = this.clients.get(user_id);
+      const user = this.clients.get(userId);
 
-      const consumer: Consumer = user.media.consumersVideo.get(data.user_id);
+      const consumer: Consumer = user.media.consumersVideo.get(data.userId);
 
       if (!consumer) {
         throw new Error(
-          `Couldn't find video consumer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find video consumer with 'userId'=${data.userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
@@ -1014,20 +1068,20 @@ export class MediasoupRoom {
   }
   /**
    * Gives the transport status.
-   * @param {Record<string, unknown>} data { type: TPeer }
-   * @param {string} user_id sender of the message
+   * @param {Record<string, unknown>} data { type: TTransportKind }
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async getTransportStats(
     data: { type: 'producer' | 'consumer' },
-    user_id: string,
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
       this.logger.log(
-        `room ${this.session_id} getTransportStats - ${data.type}`,
+        `room ${this.sessionId} getTransportStats - ${data.type}`,
       );
 
-      const user = this.clients.get(user_id);
+      const user = this.clients.get(userId);
 
       let transport: WebRtcTransport;
 
@@ -1042,7 +1096,7 @@ export class MediasoupRoom {
 
       if (!transport) {
         throw new Error(
-          `Couldn't find ${data.type} transport with 'user_id'=${user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find ${data.type} transport with 'userId'=${userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
@@ -1061,35 +1115,33 @@ export class MediasoupRoom {
   /**
    * Gives information about the user's stream
    * Measurement occurs when a stream comes from the user to the server.
-   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
-   * @param {string} _user_id sender of the message
+   * @param {Record<string, unknown>} data { userId: string; kind: MediaKind }
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async getProducerStats(
-    data: { user_id: string; kind: MediaKind },
-    _user_id: string,
+    data: { userId: string; kind: MediaKind },
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.log(
-        `room ${this.session_id} getProducerStats - ${data.kind}`,
-      );
+      this.logger.log(`room ${this.sessionId} getProducerStats - ${data.kind}`);
 
-      const target_user = this.clients.get(data.user_id);
+      const targetClient = this.clients.get(data.userId);
 
       let producer: Producer;
 
       switch (data.kind) {
         case 'video':
-          producer = target_user.media.producerVideo;
+          producer = targetClient.media.producerVideo;
           break;
         case 'audio':
-          producer = target_user.media.producerAudio;
+          producer = targetClient.media.producerAudio;
           break;
       }
 
       if (!producer) {
         throw new Error(
-          `Couldn't find ${data.kind} producer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find ${data.kind} producer with 'userId'=${data.userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
@@ -1108,35 +1160,33 @@ export class MediasoupRoom {
   /**
    * Gives information about the stream of the user to which the current user is subscribed.
    * Measurement occurs when the stream is transmitted from that user to the current user.
-   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
-   * @param {string} user_id sender of the message
+   * @param {Record<string, unknown>} data { userId: string; kind: MediaKind }
+   * @param {string} userId sender of the message
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async getConsumerStats(
-    data: { user_id: string; kind: MediaKind },
-    user_id: string,
+    data: { userId: string; kind: MediaKind },
+    userId: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.log(
-        `room ${this.session_id} getProducerStats - ${data.kind}`,
-      );
+      this.logger.log(`room ${this.sessionId} getProducerStats - ${data.kind}`);
 
-      const user = this.clients.get(user_id);
+      const user = this.clients.get(userId);
 
       let consumer: Consumer;
 
       switch (data.kind) {
         case 'video':
-          consumer = user.media.consumersVideo.get(data.user_id);
+          consumer = user.media.consumersVideo.get(data.userId);
           break;
         case 'audio':
-          consumer = user.media.consumersAudio.get(data.user_id);
+          consumer = user.media.consumersAudio.get(data.userId);
           break;
       }
 
       if (!consumer) {
         throw new Error(
-          `Couldn't find ${data.kind} consumer with 'user_id'=${data.user_id} and 'room_id'=${this.session_id}`,
+          `Couldn't find ${data.kind} consumer with 'userId'=${data.userId} and 'sessionId'=${this.sessionId}`,
         );
       }
 
@@ -1154,10 +1204,10 @@ export class MediasoupRoom {
 
   /**
    * Id of users who transmit video streams to the server.
-   * @param {string} _user_id sender of the message
+   * @param {string} userId sender of the message
    * @returns {Promise<string[]>} Promise<string[]>
    */
-  private async getVideoProducerIds(_user_id: string): Promise<string[]> {
+  private async getVideoProducerIds(userId: string): Promise<string[]> {
     try {
       return this.videoProducerIds;
     } catch (error) {
@@ -1171,10 +1221,10 @@ export class MediasoupRoom {
 
   /**
    * Id of users who transmit audio streams to the server.
-   * @param {string} _user_id sender of the message
+   * @param {string} userId sender of the message
    * @returns {Promise<string[]>} Promise<string[]>
    */
-  private async getAudioProducerIds(_user_id: string): Promise<string[]> {
+  private async getAudioProducerIds(userId: string): Promise<string[]> {
     try {
       return this.audioProducerIds;
     } catch (error) {
@@ -1188,31 +1238,56 @@ export class MediasoupRoom {
 
   /**
    * Stop streaming from the user to the server.
-   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
-   * @param {string} _user_id sender of the message
+   * @param {Record<string, unknown>} data { userId: string; kind: TMediaKind; isScreenMedia: boolean }
+   * @param {string} userId sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async producerClose(
-    data: { user_id: string; kind: MediaKind },
-    _user_id: string,
+    data: { userId: string; kind: TMediaKind; isScreenMedia: boolean },
+    userId: string,
   ): Promise<boolean> {
+    console.log('PRODUCER CLOSE');
     try {
-      const target_user = this.clients.get(data.user_id);
-
-      if (target_user) {
-        let target_producer: Producer;
-
+      const targetClient = this.clients.get(data.userId);
+      if (targetClient) {
+        let targetProducer: Producer;
         switch (data.kind) {
           case 'video':
-            target_producer = target_user.media.producerVideo;
+            if (data.isScreenMedia) {
+              targetProducer = targetClient.media.producerScreen;
+            } else {
+              targetProducer = targetClient.media.producerVideo;
+            }
             break;
           case 'audio':
-            target_producer = target_user.media.producerAudio;
+            targetProducer = targetClient.media.producerAudio;
             break;
         }
+        const clients = this.getJoinedPeers(data.userId);
+        for (const client of clients) {
+          switch (data.kind) {
+            case 'video':
+              if (data.isScreenMedia) {
+                client.consumersScreen.get(data.userId)?.close();
+              } else {
+                client.consumersVideo.get(data.userId)?.close();
+              }
+              break;
+            case 'audio':
+              client.consumersAudio.get(data.userId)?.close();
+              break;
+          }
+        }
 
-        if (target_producer && !target_producer.closed) {
-          target_producer.close();
+        if (targetProducer && !targetProducer.closed) {
+          if (data.isScreenMedia) {
+            targetClient.isScreenSharing = false;
+          }
+          targetProducer.close();
+          targetClient.io.to(this.sessionId).emit('mediaProducerClose', {
+            mediaTag: targetProducer.appData.mediaTag,
+            userId: data.userId,
+          });
         }
       }
 
@@ -1228,31 +1303,54 @@ export class MediasoupRoom {
 
   /**
    * Suspend streaming from the user to the server..
-   * @param {IProducerRequest} data { user_id: string; kind: MediaKind }
+   * @param {IProducerRequest} data { userId: string; kind: MediaKind }
    * @returns {Promise<IProducerRequest>} promise<boolean>
    */
   private async producerPause(
     data: IProducerRequest,
   ): Promise<IProducerRequest> {
     try {
-      const target_user = this.clients.get(data.user_id);
-      if (target_user) {
-        let target_producer: Producer;
+      const targetClient = this.clients.get(data.userId);
+      if (targetClient) {
+        console.warn(
+          !data.isGlobal &&
+            !targetClient.getGlobalProducerCapabilitiesByKind(data.kind),
+          'producer pause',
+        );
+        if (
+          !data.isGlobal &&
+          !targetClient.getGlobalProducerCapabilitiesByKind(data.kind)
+        ) {
+          return data;
+        }
+        let targetProducer: Producer;
 
         switch (data.kind) {
           case 'video':
-            target_producer = target_user.media.producerVideo;
+            targetProducer = targetClient.media.producerVideo;
             break;
           case 'audio':
-            target_producer = target_user.media.producerAudio;
+            targetProducer = targetClient.media.producerAudio;
             break;
         }
 
-        if (target_producer && !target_producer.paused) {
-          await target_producer.pause();
+        if (targetProducer && !targetProducer.paused) {
+          await targetProducer.pause();
+          switch (data.kind) {
+            case 'video':
+              targetClient.producerVideoEnabled = false;
+              break;
+            case 'audio':
+              targetClient.producerAudioEnabled = false;
+              break;
+          }
+          targetClient.io.to(this.sessionId).emit('mediaProducerPause', {
+            mediaTag: targetProducer.appData.mediaTag,
+            isGlobal: data.isGlobal,
+            userId: data.userId,
+          });
         }
       }
-
       return data;
     } catch (error) {
       this.logger.error(
@@ -1265,37 +1363,58 @@ export class MediasoupRoom {
 
   /**
    * Resume streaming from the user to the server.
-   * @param {Record<string, unknown>} data { user_id: string; kind: MediaKind }
-   * @param {string} _user_id sender of the message
+   * @param {Record<string, unknown>} data { userId: string; kind: MediaKind }
+   * @param {string} userId sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async producerResume(
-    data: { user_id: string; kind: MediaKind },
-    _user_id: string,
+    data: { userId: string; kind: MediaKind; isGlobal?: boolean },
+    userId: string,
   ): Promise<boolean> {
     try {
-      const target_user = this.clients.get(data.user_id);
-      if (target_user) {
-        let target_producer: Producer;
+      const targetClient = this.clients.get(data.userId);
+      if (targetClient) {
+        console.warn(
+          !data.isGlobal &&
+            !targetClient.getGlobalProducerCapabilitiesByKind(data.kind),
+          'producer resume',
+        );
+        let targetProducer: Producer;
 
         switch (data.kind) {
           case 'video':
-            target_producer = target_user.media.producerVideo;
+            targetProducer = targetClient.media.producerVideo;
             break;
           case 'audio':
-            target_producer = target_user.media.producerAudio;
+            targetProducer = targetClient.media.producerAudio;
             break;
         }
-
         if (
-          target_producer &&
-          target_producer.paused &&
-          !target_producer.closed
+          !data.isGlobal &&
+          !targetClient.getGlobalProducerCapabilitiesByKind(data.kind)
         ) {
-          await target_producer.resume();
-        } else if (target_producer && target_producer.closed) {
-          target_user.io.emit('mediaReproduce', { kind: data.kind });
+          return false;
         }
+        if (targetProducer && targetProducer.paused && !targetProducer.closed) {
+          switch (data.kind) {
+            case 'video':
+              targetClient.producerVideoEnabled = false;
+              break;
+            case 'audio':
+              targetClient.producerAudioEnabled = false;
+              break;
+          }
+          await targetProducer.resume();
+          targetClient.io.to(this.sessionId).emit('mediaProducerResume', {
+            mediaTag: targetProducer.appData.mediaTag,
+            isGlobal: data.isGlobal,
+            userId: data.userId,
+          });
+        } else if (targetProducer && targetProducer.closed) {
+          targetClient.io.emit('mediaReproduce', { kind: data.kind });
+        }
+      } else {
+        console.error('target user doesnt exists', targetClient);
       }
 
       return true;
@@ -1311,29 +1430,29 @@ export class MediasoupRoom {
   /**
    * Stream stop transmission to the server from all users..
    * @param {Record<string, unknown>} data { kind: MediaKind }
-   * @param {string} _user_id sender of the message
+   * @param {string} userId sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async allProducerClose(
     data: { kind: MediaKind },
-    _user_id: string,
+    userId: string,
   ): Promise<boolean> {
     try {
       this.clients.forEach(async (client) => {
         if (client.media) {
-          let target_producer: Producer;
+          let targetProducer: Producer;
 
           switch (data.kind) {
             case 'video':
-              target_producer = client.media.producerVideo;
+              targetProducer = client.media.producerVideo;
               break;
             case 'audio':
-              target_producer = client.media.producerAudio;
+              targetProducer = client.media.producerAudio;
               break;
           }
 
-          if (target_producer && !target_producer.closed) {
-            target_producer.close();
+          if (targetProducer && !targetProducer.closed) {
+            targetProducer.close();
           }
         }
       });
@@ -1351,29 +1470,29 @@ export class MediasoupRoom {
   /**
    * Pause Stream transmission to the server from all users.
    * @param {Record<string, unknown>} data { kind: MediaKind }
-   * @param {string} _user_id sender of the message
+   * @param {string} userId sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async allProducerPause(
     data: { kind: MediaKind },
-    _user_id: string,
+    userId: string,
   ): Promise<boolean> {
     try {
       this.clients.forEach(async (client) => {
         if (client.media) {
-          let target_producer: Producer;
+          let targetProducer: Producer;
 
           switch (data.kind) {
             case 'video':
-              target_producer = client.media.producerVideo;
+              targetProducer = client.media.producerVideo;
               break;
             case 'audio':
-              target_producer = client.media.producerAudio;
+              targetProducer = client.media.producerAudio;
               break;
           }
 
-          if (target_producer && !target_producer.paused) {
-            await target_producer.pause();
+          if (targetProducer && !targetProducer.paused) {
+            await targetProducer.pause();
           }
         }
       });
@@ -1391,34 +1510,34 @@ export class MediasoupRoom {
   /**
    * Resume streaming from all users to the server.
    * @param {Record<string, unknown>} data { kind: MediaKind }
-   * @param {string} _user_id sender of the message
+   * @param {string} userId sender of the message
    * @returns {Promise<boolean>} promise<boolean>
    */
   private async allProducerResume(
     data: { kind: MediaKind },
-    _user_id: string,
+    userId: string,
   ): Promise<boolean> {
     try {
       this.clients.forEach(async (client) => {
         if (client.media) {
-          let target_producer: Producer;
+          let targetProducer: Producer;
 
           switch (data.kind) {
             case 'video':
-              target_producer = client.media.producerVideo;
+              targetProducer = client.media.producerVideo;
               break;
             case 'audio':
-              target_producer = client.media.producerAudio;
+              targetProducer = client.media.producerAudio;
               break;
           }
 
           if (
-            target_producer &&
-            target_producer.paused &&
-            !target_producer.closed
+            targetProducer &&
+            targetProducer.paused &&
+            !targetProducer.closed
           ) {
-            await target_producer.resume();
-          } else if (target_producer && target_producer.closed) {
+            await targetProducer.resume();
+          } else if (targetProducer && targetProducer.closed) {
             client.io.emit('mediaReproduce', { kind: data.kind });
           }
         }
@@ -1495,6 +1614,13 @@ export class MediasoupRoom {
     producerPeer: RoomClient,
     producer: Producer,
   ) {
+    this.logger.warn(
+      this.router.canConsume({
+        producerId: producer.id,
+        rtpCapabilities: this.router.rtpCapabilities,
+      }),
+      'CAN CONSUME',
+    );
     if (
       !consumerPeer.rtpCapabilities ||
       !this.router.canConsume({
@@ -1526,7 +1652,11 @@ export class MediasoupRoom {
       this.logger.warn(error, '_createConsumer() | [error:"%o"]');
       return;
     }
-    switch (producer.kind) {
+    this.logger.warn(producer.appData, 'CREATE CONSUMER - set consumer');
+    switch (producer.appData.mediaTag) {
+      case 'screen-media':
+        consumerPeer.media.consumersScreen.set(producerPeer.id, consumer);
+        break;
       case 'video':
         consumerPeer.media.consumersVideo.set(producerPeer.id, consumer);
         break;
@@ -1536,7 +1666,10 @@ export class MediasoupRoom {
     }
 
     consumer.on('transportclose', () => {
-      switch (producer.kind) {
+      switch (producer.appData.mediaTag) {
+        case 'screen-media':
+          consumerPeer.media.consumersScreen.delete(producerPeer.id);
+          break;
         case 'video':
           consumerPeer.media.consumersVideo.delete(producerPeer.id);
           break;
@@ -1546,7 +1679,10 @@ export class MediasoupRoom {
       }
     });
     consumer.on('producerclose', () => {
-      switch (producer.kind) {
+      switch (producer.appData.mediaTag) {
+        case 'screen-media':
+          consumerPeer.media.consumersScreen.delete(producerPeer.id);
+          break;
         case 'video':
           consumerPeer.media.consumersVideo.delete(producerPeer.id);
           break;
@@ -1555,41 +1691,47 @@ export class MediasoupRoom {
           break;
       }
       consumerPeer.io.emit('consumerClosed', {
-        user_id: producerPeer.id,
+        userId: producerPeer.id,
         kind: producer.kind,
+        mediaTag: producer.appData.mediaTag,
       });
     });
     consumer.on('producerpause', () => {
       consumerPeer.io.emit('consumerPaused', {
-        user_id: producerPeer.id,
+        userId: producerPeer.id,
         kind: producer.kind,
+        mediaTag: producer.appData.mediaTag,
       });
     });
     consumer.on('producerresume', () => {
       consumerPeer.io.emit('consumerResumed', {
-        user_id: producerPeer.id,
+        userId: producerPeer.id,
         kind: producer.kind,
+        mediaTag: producer.appData.mediaTag,
       });
     });
     consumer.on('score', (score) => {
       consumerPeer.io.emit('consumerScore', {
-        user_id: producerPeer.id,
+        mediaTag: producer.appData.mediaTag,
+        userId: producerPeer.id,
         kind: producer.kind,
         score: score,
       });
     });
-    consumer.on('layerschange', (layers) => {
-      const args = {
-        user_id: producerPeer.id,
-        kind: producer.kind,
-        spatialLayer: layers?.spatialLayer,
-        temporalLayer: layers?.temporalLayer,
-      };
-      consumerPeer.io.emit('consumersLayersChanged', args);
-    });
+    if (producer.appData.mediaTag === 'video') {
+      consumer.on('layerschange', (layers) => {
+        const args = {
+          userId: producerPeer.id,
+          kind: producer.kind,
+          spatialLayer: layers?.spatialLayer,
+          temporalLayer: layers?.temporalLayer,
+        };
+        consumerPeer.io.emit('consumersLayersChanged', args);
+      });
+    }
 
     try {
-      await this.sendRequest(consumerPeer.io, 'newConsumer', {
+      const response = await this.sendRequest(consumerPeer.io, 'newConsumer', {
         peerId: producerPeer.id,
         producerId: producer.id,
         id: consumer.id,
@@ -1599,14 +1741,14 @@ export class MediasoupRoom {
         appData: producer.appData,
         producerPaused: consumer.producerPaused,
       });
-
+      this.logger.warn(response, 'RESPONSE NEW CONSUMER');
       // Now that we got the positive response from the remote endpoint, resume
       // the Consumer so the remote endpoint will receive the a first RTP packet
       // of this new stream once its PeerConnection is already ready to process
       // and associate it.
       await consumer.resume();
       consumerPeer.io.emit('consumerScore', {
-        user_id: producerPeer.id,
+        userId: producerPeer.id,
         kind: producer.kind,
         score: consumer.score,
       });
@@ -1642,7 +1784,7 @@ export class MediasoupRoom {
     msg: Record<string, unknown>,
   ): boolean {
     try {
-      return client.broadcast.to(this.session_id).emit(event, msg);
+      return client.broadcast.to(this.sessionId).emit(event, msg);
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssRoom - broadcast');
     }
@@ -1657,7 +1799,7 @@ export class MediasoupRoom {
     try {
       console.log(event);
       console.log(msg);
-      return this.wssServer.to(this.session_id).emit(event, msg);
+      return this.wssServer.to(this.sessionId).emit(event, msg);
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssRoom - broadcastAll');
     }
@@ -1668,6 +1810,34 @@ export class MediasoupRoom {
     payload: Record<string, unknown>,
   ): void {
     client.emit(event, payload);
+  }
+
+  public async consumerPause(
+    targetId: string,
+    kind: MediaKind,
+    action: 'pause' | 'resume',
+  ) {
+    const user = this.clients.get(targetId);
+    switch (kind) {
+      case 'video':
+        switch (action) {
+          case 'resume':
+            // await user.producerVideo.resume();
+            user.consumersVideo.forEach(async (value, key) => {
+              value.resume();
+            });
+            break;
+          case 'pause':
+            user.consumersVideo.forEach(async (value, key) => {
+              value.pause();
+            });
+            // await user.producerVideo.pause();
+            break;
+        }
+        break;
+      case 'audio':
+        break;
+    }
   }
 
   async sendRequest(socket, method, data) {

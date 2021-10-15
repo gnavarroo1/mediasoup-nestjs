@@ -63,6 +63,7 @@ interface IMediasoupSettings {
 }
 
 interface IProducerRequest {
-  user_id: string;
+  userId: string;
   kind: MediaKind;
+  isGlobal?: boolean;
 }

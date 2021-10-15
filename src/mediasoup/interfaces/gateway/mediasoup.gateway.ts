@@ -12,13 +12,16 @@ import { Server, Socket } from 'socket.io';
 import { LoggerService } from '../../../logger/logger.service';
 import { IMediasoupSettings } from '../../../../types/global';
 import { AppConfigService } from '../../../config/config.service';
-import { IClientQuery } from '../../../wss/wss.interfaces';
+import { IClientQuery } from '../../types/mediasoup.types';
 import { MediasoupService } from '../../services/mediasoup.service';
 
-import { TKind } from '../../types/mediasoup.types';
+import {
+  TMediaProduceCapabilities,
+  TTransportKind,
+} from '../../types/mediasoup.types';
 import { RtpCapabilities } from 'mediasoup/lib/RtpParameters';
 
-@WebSocketGateway({
+@WebSocketGateway(8098, {
   cors: {
     methods: ['GET', 'POST'],
   },
@@ -45,9 +48,9 @@ export class MediasoupGateway
   async handleConnection(@ConnectedSocket() client: Socket): Promise<boolean> {
     this.mediasoupService.server = this.server;
     this.logger.info(`User connected on ${client.id}`);
-    const { session_id } = this.getClientQuery(client);
+    const { sessionId } = this.getClientQuery(client);
     try {
-      return this.mediasoupService.initSession(session_id);
+      return this.mediasoupService.initSession(sessionId);
     } catch (e) {
       this.logger.error(e.message, e.stack, 'handleConnection');
     }
@@ -57,8 +60,8 @@ export class MediasoupGateway
     @ConnectedSocket() client: Socket,
   ): Promise<void> {
     try {
-      const { user_id, session_id } = this.getClientQuery(client);
-      await this.mediasoupService.removeClient(session_id, user_id);
+      const { userId, sessionId } = this.getClientQuery(client);
+      await this.mediasoupService.removeClient(sessionId, userId);
     } catch (error) {
       this.logger.error(
         error.message,
@@ -70,16 +73,16 @@ export class MediasoupGateway
 
   @SubscribeMessage('media')
   public async media(client: Socket, data: any): Promise<any> {
-    const { user_id, session_id } = this.getClientQuery(client);
+    const { userId, sessionId } = this.getClientQuery(client);
     try {
       // this.logger.info(
-      //   `the client ${user_id}, requested action ${data.action} `,
+      //   `the client ${userId}, requested action ${data.action} `,
       //   'speakmsclient',
       // );
       return await this.mediasoupService.handleMedia(client, {
         data,
-        session_id: session_id,
-        user_id: user_id,
+        sessionId: sessionId,
+        userId: userId,
       });
     } catch (error) {
       this.logger.error(error.message, error.stack, 'WssGateway - media');
@@ -89,18 +92,24 @@ export class MediasoupGateway
   @SubscribeMessage('joinRoom')
   public async handleJoinRoom(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { kind: TKind; rtpCapabilities: RtpCapabilities },
+    @MessageBody()
+    payload: {
+      kind: TTransportKind;
+      rtpCapabilities: RtpCapabilities;
+      producerCapabilities: TMediaProduceCapabilities;
+    },
   ): Promise<any> {
-    const { user_id, session_id, device } = this.getClientQuery(client);
-    const res = await this.mediasoupService.joinRoom({
-      user_id,
-      session_id,
+    const { userId, sessionId, device } = this.getClientQuery(client);
+    console.log(payload.kind, 'KIND');
+    return this.mediasoupService.joinRoom({
+      userId,
+      sessionId,
       device,
       kind: payload.kind,
       client,
       rtpCapabilities: payload.rtpCapabilities,
+      producerCapabilities: payload.producerCapabilities,
     });
-    return res;
   }
 
   @SubscribeMessage('addClient')
@@ -108,16 +117,30 @@ export class MediasoupGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: any,
   ): Promise<any> {
-    const { user_id, session_id, device, kind } = this.getClientQuery(client);
-    return await this.mediasoupService.addClient(client, {
+    const { userId, sessionId, device, kind } = this.getClientQuery(client);
+    return this.mediasoupService.addClient(client, {
       query: {
-        user_id,
-        session_id,
+        userId,
+        sessionId,
         device,
         kind: payload.kind,
       },
       data: payload.data,
     });
+  }
+
+  @SubscribeMessage('toggleDevice')
+  public async handleToggleDevice(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: any,
+  ): Promise<any> {
+    const { userId, sessionId } = this.getClientQuery(client);
+    client.to(sessionId).emit('toggleDevice', {
+      sender: userId,
+      action: payload.action,
+      kind: payload.kind,
+    });
+    return payload;
   }
 
   private getClientQuery(client: Socket): IClientQuery {
