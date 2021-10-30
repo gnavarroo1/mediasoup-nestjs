@@ -361,10 +361,6 @@ export class MediasoupRoom {
       return {
         id: peer.id,
         kind: peer.kind,
-        producerAudioEnabled: peer.producerAudioEnabled,
-        producerVideoEnabled: peer.producerVideoEnabled,
-        globalAudioEnabled: peer.globalProduceAudioEnabled,
-        globalVideoEnabled: peer.globalProduceVideoEnabled,
         isScreenSharing: peer.isScreenSharing,
       };
     });
@@ -463,7 +459,7 @@ export class MediasoupRoom {
           );
         case 'restartIce':
           return await this.restartIce(
-            msg.data as { type: 'producer' | 'consumer' },
+            msg.data as { type: 'PRODUCER' | 'CONSUMER' },
             userId,
           );
         case 'requestConsumerKeyFrame':
@@ -473,7 +469,7 @@ export class MediasoupRoom {
           );
         case 'getTransportStats':
           return await this.getTransportStats(
-            msg.data as { type: 'producer' | 'consumer' },
+            msg.data as { type: 'PRODUCER' | 'CONSUMER' },
             userId,
           );
         case 'getProducerStats':
@@ -584,10 +580,10 @@ export class MediasoupRoom {
         this.logger.log({ name: userId }, 'Transport close');
       });
       switch (data.type) {
-        case 'producer':
+        case 'PRODUCER':
           client.producerTransport = transport;
           break;
-        case 'consumer':
+        case 'CONSUMER':
           client.consumerTransport = transport;
           break;
       }
@@ -626,10 +622,10 @@ export class MediasoupRoom {
       const user = this.clients.get(userId);
       let transport: WebRtcTransport;
       switch (data.type) {
-        case 'producer':
+        case 'PRODUCER':
           transport = user.producerTransport;
           break;
-        case 'consumer':
+        case 'CONSUMER':
           transport = user.consumerTransport;
           break;
       }
@@ -732,11 +728,11 @@ export class MediasoupRoom {
         );
       }
       producer.on('score', (score: ProducerScore[]) => {
-        this.logger.log(
-          `room ${this.sessionId} user ${userId} producer ${
-            data.kind
-          } score ${JSON.stringify(score)}`,
-        );
+        // this.logger.log(
+        //   `room ${this.sessionId} user ${userId} producer ${
+        //     data.kind
+        //   } score ${JSON.stringify(score)}`,
+        // );
       });
 
       for (const peer of this.getJoinedPeers(user.id)) {
@@ -954,11 +950,11 @@ export class MediasoupRoom {
         });
 
         consumer.on('score', (score: ConsumerScore[]) => {
-          this.logger.log(
-            `room ${this.sessionId} user ${userId} consumer ${
-              data.kind
-            } score ${JSON.stringify(score)}`,
-          );
+          // this.logger.log(
+          //   `room ${this.sessionId} user ${userId} consumer ${
+          //     data.kind
+          //   } score ${JSON.stringify(score)}`,
+          // );
         });
       }
 
@@ -1009,10 +1005,10 @@ export class MediasoupRoom {
       let transport: WebRtcTransport;
 
       switch (data.type) {
-        case 'producer':
+        case 'PRODUCER':
           transport = user.media.producerTransport;
           break;
-        case 'consumer':
+        case 'CONSUMER':
           transport = user.media.consumerTransport;
           break;
       }
@@ -1073,7 +1069,7 @@ export class MediasoupRoom {
    * @returns {Promise<Record<string, unknown>>} Promise<Record<string, unknown>>
    */
   private async getTransportStats(
-    data: { type: 'producer' | 'consumer' },
+    data: { type: 'PRODUCER' | 'CONSUMER' },
     userId: string,
   ): Promise<Record<string, unknown>> {
     try {
@@ -1086,10 +1082,10 @@ export class MediasoupRoom {
       let transport: WebRtcTransport;
 
       switch (data.type) {
-        case 'producer':
+        case 'PRODUCER':
           transport = user.media.producerTransport;
           break;
-        case 'consumer':
+        case 'CONSUMER':
           transport = user.media.consumerTransport;
           break;
       }
@@ -1169,7 +1165,7 @@ export class MediasoupRoom {
     userId: string,
   ): Promise<Record<string, unknown>> {
     try {
-      this.logger.log(`room ${this.sessionId} getProducerStats - ${data.kind}`);
+      this.logger.log(`room ${this.sessionId} getConsumerStats - ${data.kind}`);
 
       const user = this.clients.get(userId);
 
@@ -1185,6 +1181,9 @@ export class MediasoupRoom {
       }
 
       if (!consumer) {
+        this.logger.error(
+          `Couldn't find ${data.kind} consumer with 'userId'=${data.userId} and 'sessionId'=${this.sessionId}`,
+        );
         throw new Error(
           `Couldn't find ${data.kind} consumer with 'userId'=${data.userId} and 'sessionId'=${this.sessionId}`,
         );

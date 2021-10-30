@@ -46,7 +46,9 @@ export interface IMsMessage {
     | 'producerResume'
     | 'allProducerClose'
     | 'allProducerPause'
-    | 'allProducerResume';
+    | 'allProducerResume'
+    | 'consumerResume'
+    | 'consumerPause';
   readonly data?: Record<string, unknown>;
 }
 
@@ -78,9 +80,7 @@ export type AddClientDto = {
 };
 const MEDIA_KIND_AUDIO = 'audio';
 const MEDIA_KIND_VIDEO = 'video';
-// export type TTransportKind = 'consumer' | 'producer';
-export type TTransportKind = 'consumer' | 'producer';
-export type TState = 'paused' | 'resumed';
+export type TTransportKind = 'CONSUMER' | 'PRODUCER';
 export type TMediaKind = 'audio' | 'video';
 
 export type TMediaProduceCapabilities = {
