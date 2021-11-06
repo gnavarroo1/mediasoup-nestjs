@@ -931,22 +931,22 @@ export class MediasoupRoom {
         data.appData.mediaTag === 'audio'
       ) {
         consumer.on('producerpause', async () => {
-          await consumer.pause();
-          user.io.emit('mediaProducerPause', {
-            userId: data.userId,
-            kind: data.kind,
-          });
+          // await consumer.pause();
+          // user.io.emit('mediaProducerPause', {
+          //   userId: data.userId,
+          //   kind: data.kind,
+          // });
         });
 
         consumer.on('producerresume', async () => {
           this.logger.warn(
             `producer ${data.userId} has resumed his stream. i am ${userId} `,
           );
-          await consumer.resume();
-          user.io.emit('mediaProducerResume', {
-            userId: data.userId,
-            kind: data.kind,
-          });
+          // await consumer.resume();
+          // user.io.emit('mediaProducerResume', {
+          //   userId: data.userId,
+          //   kind: data.kind,
+          // });
         });
 
         consumer.on('score', (score: ConsumerScore[]) => {
