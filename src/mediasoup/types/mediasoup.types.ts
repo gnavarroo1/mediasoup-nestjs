@@ -46,9 +46,7 @@ export interface IMsMessage {
     | 'producerResume'
     | 'allProducerClose'
     | 'allProducerPause'
-    | 'allProducerResume'
-    | 'consumerResume'
-    | 'consumerPause';
+    | 'allProducerResume';
   readonly data?: Record<string, unknown>;
 }
 

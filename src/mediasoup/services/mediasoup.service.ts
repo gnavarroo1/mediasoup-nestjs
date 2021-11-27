@@ -5,14 +5,13 @@ import {
 } from '../../../types/global';
 import { Worker, WorkerSettings } from 'mediasoup/lib/types';
 import { LoggerService } from '../../logger/logger.service';
-import { IWorkerInfo } from '../types/mediasoup.types';
 import { AppConfigService } from '../../config/config.service';
 import { MediasoupRoom } from '../types/room.mediasoup';
 import * as mediasoup from 'mediasoup';
 import {
   AddClientDto,
   IClientQuery,
-  TTransportKind,
+  IWorkerInfo,
 } from '../types/mediasoup.types';
 import { Server, Socket } from 'socket.io';
 
@@ -103,7 +102,6 @@ export class MediasoupService {
           pid: worker.pid,
           worker,
         };
-
         return acc;
       },
       {},
@@ -242,10 +240,33 @@ export class MediasoupService {
       return room.speakMsClient(data.userId, data.data);
     }
   }
-  public async handleToggleConsumer(client: Socket, data: any): Promise<any> {
-    const room = this._rooms.get(data.sessionId);
+
+  public async handleConsumerActions(payload: {
+    userId: string;
+    sessionId: string;
+    targetId: string;
+    action: 'pause' | 'resume';
+    kind: 'audio' | 'video';
+  }) {
+    const room = this._rooms.get(payload.sessionId);
     if (room) {
-      return;
+      switch (payload.action) {
+        case 'pause':
+          return room.consumerPause(
+            payload.userId,
+            payload.targetId,
+            payload.kind,
+          );
+
+        case 'resume':
+          return room.consumerResume(
+            payload.userId,
+            payload.targetId,
+            payload.kind,
+          );
+      }
+    } else {
+      return { success: false, msg: 'NO SESSION FOUND' };
     }
   }
 }

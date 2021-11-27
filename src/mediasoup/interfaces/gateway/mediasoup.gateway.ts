@@ -12,16 +12,15 @@ import { Server, Socket } from 'socket.io';
 import { LoggerService } from '../../../logger/logger.service';
 import { IMediasoupSettings } from '../../../../types/global';
 import { AppConfigService } from '../../../config/config.service';
-import { IClientQuery } from '../../types/mediasoup.types';
 import { MediasoupService } from '../../services/mediasoup.service';
-
 import {
   TMediaProduceCapabilities,
   TTransportKind,
+  IClientQuery,
 } from '../../types/mediasoup.types';
 import { RtpCapabilities } from 'mediasoup/lib/RtpParameters';
 
-@WebSocketGateway(8098, {
+@WebSocketGateway({
   cors: {
     methods: ['GET', 'POST'],
   },
@@ -38,7 +37,6 @@ export class MediasoupGateway
     private mediasoupService: MediasoupService,
   ) {
     this.mediasoupSettings = appConfig.mediasoupSettings;
-    this.logger.info(`Creating workers`, 'Constructor');
   }
 
   afterInit(server: Server): any {
@@ -145,5 +143,25 @@ export class MediasoupGateway
 
   private getClientQuery(client: Socket): IClientQuery {
     return client.handshake.query as unknown as IClientQuery;
+  }
+
+  @SubscribeMessage('toggleConsumer')
+  public async handleConsumerActions(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    payload: {
+      targetId: string;
+      action: 'pause' | 'resume';
+      kind: 'audio' | 'video';
+    },
+  ): Promise<any> {
+    const { userId, sessionId } = this.getClientQuery(client);
+    return this.mediasoupService.handleConsumerActions({
+      userId,
+      sessionId,
+      targetId: payload.targetId,
+      action: payload.action,
+      kind: payload.kind,
+    });
   }
 }
